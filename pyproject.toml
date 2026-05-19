@@ -1,0 +1,18 @@
+[build-system]
+requires = ["setuptools>=68.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "agent-search"
+version = "0.1.0"
+description = "Anti-detection headless browser automation framework based on CloakBrowser"
+requires-python = ">=3.12"
+dependencies = [
+    "cloakbrowser",
+]
+
+[project.scripts]
+cloak = "agent_search.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["agent_search*"]

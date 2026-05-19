@@ -1,0 +1,41 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+.eggs/
+
+# Virtual environments
+venv/
+.venv/
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+supervisor*.log
+
+# Response files (test artifacts)
+response_*.txt
+
+# Test cache
+.pytest_cache/
+
+# Environment
+.env
+
+# CloakBrowser binary
+cloakbrowser-bin/
+
+# Search logs
+search_logs/
+
+# Project specific
+PROGRESS.md
