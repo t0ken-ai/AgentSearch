@@ -2,7 +2,7 @@
 
 **AI Agent 的搜索引擎。免费、本地、隐私。**
 
-一个为 AI Agent 设计的隐身网页搜索工具包，绕过 39+ 个网站的反爬检测——完全在你的机器上运行，零 API Key、零云依赖、零数据泄露。
+一个为 AI Agent 设计的隐身网页搜索工具包，绕过 60+ 个网站的反爬检测——完全在你的机器上运行，零 API Key、零云依赖、零数据泄露。
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Python 3.9+](https://img.shields.io/badge/Python-3.9+-blue.svg)](https://www.python.org/)
@@ -32,7 +32,7 @@
 
 ## 特点
 
-- **39+ 网站适配器** — Google、Bing、DuckDuckGo、YouTube、Reddit、GitHub、StackOverflow、B站、知乎、小红书、抖音 等等
+- **60+ 网站适配器** — Google、Bing、DuckDuckGo、YouTube、Reddit、GitHub、StackOverflow、arXiv、HuggingFace、IMDB、Goodreads、Amazon、eBay、Pinterest、SoundCloud、Apple Podcasts、B站、知乎、小红书、抖音 等等
 - **隐身无头浏览器** — CloakBrowser 在 C++ 源码层面修改 Chromium。不是 JS 注入。不是配置补丁。反爬系统看到的是真实浏览器，因为它*就是*真实浏览器。
 - **零配置** — 无需 API Key、无需注册、无需账号。安装即用。
 - **隐私优先** — 所有处理在本地完成。你的搜索查询永远不会触碰任何云服务。
@@ -44,21 +44,37 @@
 
 ## 支持的网站
 
-**搜索引擎：** Google、Bing、DuckDuckGo、Yandex、Brave、百度、搜狗、360搜索、Startpage、Ecosia、Qwant
+61 个适配器，分布在 15 个类目。每个网站都有独立的引擎模块（`cloak_stealth_suite/engines/`）和可独立运行的测试（`tests/test_<name>.py`）。
 
-**技术 & 开发：** GitHub、StackOverflow、Hacker News、NPM、dev.to
+**搜索引擎 (11)：** Google、Bing、DuckDuckGo、Yandex、Brave、百度、搜狗、360 搜索、Startpage、Ecosia、Qwant
 
-**社交 & 论坛：** Reddit、Twitter/X、BlackHatWorld、Quora、知乎、微博、小红书
+**代码 & 开发 (5)：** GitHub、StackOverflow、Hacker News、NPM、dev.to
 
-**内容 & 媒体：** Medium、Wikipedia、Wikivoyage、YouTube、Product Hunt、Spotify、Twitch、TikTok、Instagram、Netflix、B站、抖音、今日头条
+**AI & 研究 (2)：** HuggingFace、arXiv
 
-**购物 & 商业：** Amazon、Icecat、LinkedIn Jobs、Indeed、Yelp
+**知识库 (4)：** Wikipedia、Wikivoyage、PubMed、Wolfram Alpha
 
-**学术 & 专业：** PubMed、Google Patents、VirusTotal、Internet Archive、Wolfram Alpha
+**社交 & 论坛 (6)：** Reddit、Reddit Subreddit (JSON API)、Twitter/X、Quora、BlackHatWorld、Instagram
 
-**图片：** Unsplash、Pixabay、Pexels
+**中文平台 (6)：** 知乎、微博、小红书、抖音、今日头条、B站
 
-**播客：** 小宇宙 FM
+**视频 & 直播 (4)：** YouTube、Twitch、Netflix、TikTok
+
+**音乐 / 音频 / 播客 (4)：** Spotify、SoundCloud、Apple Podcasts、小宇宙 FM
+
+**电影 & 图书 (2)：** IMDB、Goodreads
+
+**资讯 & 内容 (2)：** Medium、Product Hunt
+
+**电商 & 购物 (4)：** Amazon、eBay、Icecat、Steam
+
+**招聘 & 本地 (3)：** LinkedIn Jobs、Indeed、Yelp
+
+**专利 & 安全 (2)：** Google Patents、VirusTotal
+
+**档案 & 文件 (2)：** Internet Archive、1337x
+
+**图片 (4)：** Unsplash、Pixabay、Pexels、Pinterest
 
 *持续增加中 — 新的适配器不断添加。*
 
@@ -168,7 +184,7 @@ AgentSearch/
 │   │   ├── base.py          # BaseEngine + SearchResult
 │   │   ├── google.py
 │   │   ├── duckduckgo.py
-│   │   └── ...              # 39+ 个适配器
+│   │   └── ...              # 60+ 个适配器
 │   ├── stealth/
 │   │   └── enhance.py       # 反检测 JS 注入
 │   └── tests/               # 测试套件
@@ -209,7 +225,7 @@ class MySiteEngine(BaseEngine):
 | **API Key** | 不需要 | 不需要 | 必须 | 不需要 |
 | **反检测** | C++ 层面补丁 | UA 伪装 | 不适用（API 访问） | 基础 Puppeteer |
 | **安装** | pip install | Docker + 配置 | 注册 + API key | npm install |
-| **网站数** | 39+ 适配器 | 聚合现有搜索引擎 | 仅 Google | 15 个引擎 |
+| **网站数** | 60+ 适配器 | 聚合现有搜索引擎 | 仅 Google | 15 个引擎 |
 | **JS 渲染** | ✅ 完整浏览器 | ❌ 仅 HTTP | ❌ 仅 API | ✅ Puppeteer |
 | **需登录网站** | ✅ Cookie 导入 | ❌ | ❌ | ❌ |
 

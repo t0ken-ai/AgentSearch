@@ -2,7 +2,7 @@
 
 **The search engine for AI agents. Free, local, private.**
 
-A stealth web search toolkit for AI agents that bypasses bot detection on 39+ websites — running entirely on your machine, with zero API keys, zero cloud dependency, and zero data leakage.
+A stealth web search toolkit for AI agents that bypasses bot detection on 60+ websites — running entirely on your machine, with zero API keys, zero cloud dependency, and zero data leakage.
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Python 3.9+](https://img.shields.io/badge/Python-3.9+-blue.svg)](https://www.python.org/)
@@ -32,7 +32,7 @@ Most "free" search tools aren't really free:
 
 ## Features
 
-- **39+ website adapters** — Google, Bing, DuckDuckGo, YouTube, Reddit, GitHub, StackOverflow, Hacker News, Medium, Amazon, Wikipedia, Bilibili, Zhihu, Xiaohongshu, and many more
+- **60+ website adapters** — Google, Bing, DuckDuckGo, YouTube, Reddit, GitHub, StackOverflow, Hacker News, arXiv, HuggingFace, IMDB, Goodreads, Amazon, eBay, Wikipedia, Bilibili, Zhihu, Xiaohongshu, Pinterest, SoundCloud, Apple Podcasts and many more
 - **Headless stealth browsing** — CloakBrowser modifies Chromium at the C++ source level. Not a JS injection. Not a config patch. Anti-bot systems see a real browser because it *is* a real browser.
 - **Zero configuration** — no API keys, no accounts, no sign-ups. Install and search.
 - **Privacy first** — all processing happens locally. Your search queries never touch any cloud service.
@@ -44,21 +44,37 @@ Most "free" search tools aren't really free:
 
 ## Supported Sites
 
-**Search Engines:** Google, Bing, DuckDuckGo, Yandex, Brave, Baidu, Sogou, 360 Search, Startpage, Ecosia, Qwant
+61 adapters across 15 categories. Every site below has its own engine module under `cloak_stealth_suite/engines/` and a runnable test under `tests/test_<name>.py`.
 
-**Tech & Dev:** GitHub, StackOverflow, Hacker News, NPM, dev.to
+**Search Engines (11):** Google, Bing, DuckDuckGo, Yandex, Brave, Baidu, Sogou, 360 Search, Startpage, Ecosia, Qwant
 
-**Social & Forum:** Reddit, Twitter/X, BlackHatWorld, Quora, Zhihu, Weibo, Xiaohongshu
+**Code & Dev (5):** GitHub, StackOverflow, Hacker News, NPM, dev.to
 
-**Content & Media:** Medium, Wikipedia, Wikivoyage, YouTube, Product Hunt, Spotify, Twitch, TikTok, Instagram, Netflix, Bilibili, Douyin, Toutiao
+**AI & Research (2):** HuggingFace, arXiv
 
-**Shopping & Business:** Amazon, Icecat, LinkedIn Jobs, Indeed, Yelp
+**Knowledge (4):** Wikipedia, Wikivoyage, PubMed, Wolfram Alpha
 
-**Academic & Specialized:** PubMed, Google Patents, VirusTotal, Internet Archive, Wolfram Alpha
+**Social & Forum (6):** Reddit, Reddit Subreddit (JSON API), Twitter/X, Quora, BlackHatWorld, Instagram
 
-**Images:** Unsplash, Pixabay, Pexels
+**Chinese Platforms (6):** Zhihu, Weibo, Xiaohongshu (RED), Douyin, Toutiao, Bilibili
 
-**Podcasts:** Xiaoyuzhou FM
+**Video & Streaming (4):** YouTube, Twitch, Netflix, TikTok
+
+**Music, Audio & Podcasts (4):** Spotify, SoundCloud, Apple Podcasts, Xiaoyuzhou FM
+
+**Movies & Books (2):** IMDB, Goodreads
+
+**News & Content (2):** Medium, Product Hunt
+
+**E-commerce & Shopping (4):** Amazon, eBay, Icecat, Steam
+
+**Jobs & Local (3):** LinkedIn Jobs, Indeed, Yelp
+
+**Patents & Security (2):** Google Patents, VirusTotal
+
+**Archive & Files (2):** Internet Archive, 1337x
+
+**Images (4):** Unsplash, Pixabay, Pexels, Pinterest
 
 *And growing — new adapters are being added continuously.*
 
@@ -168,7 +184,7 @@ AgentSearch/
 │   │   ├── base.py          # BaseEngine + SearchResult
 │   │   ├── google.py
 │   │   ├── duckduckgo.py
-│   │   └── ...              # 39+ adapters
+│   │   └── ...              # 60+ adapters
 │   ├── stealth/
 │   │   └── enhance.py       # Anti-detection JS injection
 │   └── tests/               # Test suite
@@ -209,7 +225,7 @@ class MySiteEngine(BaseEngine):
 | **API Key** | None needed | None needed | Required | None needed |
 | **Anti-detection** | C++ level patches | UA spoofing | N/A (API access) | Basic Puppeteer |
 | **Setup** | pip install | Docker + config | Sign up + API key | npm install |
-| **Sites** | 39+ adapters | Aggregates existing SEs | Google only | 15 engines |
+| **Sites** | 60+ adapters | Aggregates existing SEs | Google only | 15 engines |
 | **JS rendering** | ✅ Full browser | ❌ HTTP only | ❌ API only | ✅ Puppeteer |
 | **Login sites** | ✅ Cookie import | ❌ | ❌ | ❌ |
 
