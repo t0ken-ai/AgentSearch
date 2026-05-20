@@ -1,50 +1,40 @@
-"""Amazon search adapter test.
+"""Icecat search adapter smoke test.
 
 What it does:
-1. Run AmazonEngine.search("mechanical keyboard") with up to 3 attempts.
-2. After each attempt dump diagnostics: page title, page url, host strategy,
-   selector counts, block reason (if any) — same shape as test_indeed.py.
-3. PASS if at least one result comes back; otherwise FAIL with diagnostics.
-4. Print the top 5 results including price, rating, reviews_count, image_url
-   and ASIN.
+1. Run IcecatEngine.search("iPhone 16") with up to 3 attempts (the SPA is
+   slow on first paint so we leave the BaseEngine retry loop in place).
+2. Assert at least one SearchResult comes back.
+3. Print the top 5 results — title, URL, brand, category, image, specs,
+   product_code, icecat_id — so it doubles as a scrape sanity-check.
 
 Run:
     source ~/tools/cloakbrowser/venv/bin/activate
     cd /Users/gao/projects/AgentSearch
-    python tests/test_amazon.py
+    python tests/test_icecat.py
 """
 
 from __future__ import annotations
 
 import logging
-import os
 import sys
 import time
 import traceback
 
-# Make sure the AgentSearch project root wins over any older editable install
-# of `cloak_stealth_suite` that might be registered in site-packages (e.g. the
-# stale copy at /Users/gao/projects/cloak-stealth-suite/), which would lack
-# this repo's `core` module and break the import below.
-_PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-if _PROJECT_ROOT not in sys.path:
-    sys.path.insert(0, _PROJECT_ROOT)
-
 from cloak_stealth_suite import core
-from cloak_stealth_suite.engines.amazon import AmazonEngine
+from cloak_stealth_suite.engines.icecat import IcecatEngine
 from cloak_stealth_suite.stealth.enhance import check_blocked
 
 
-QUERY = "mechanical keyboard"
+QUERY = "iPhone 16"
 LIMIT = 10
 MAX_ATTEMPTS = 3
 
 
-def _attempt(engine: AmazonEngine, attempt: int) -> list:
+def _attempt(engine: IcecatEngine, attempt: int) -> list:
     """Run a single search attempt and dump diagnostics. Returns the result list."""
     print(f"\n--- attempt {attempt}/{MAX_ATTEMPTS} ---")
     # Bypass BaseEngine.search()'s retry loop so we can dump per-attempt
-    # diagnostics, exactly like test_indeed.py.
+    # diagnostics, exactly like test_amazon.py.
     results = engine._do_search(QUERY, LIMIT)
 
     page = engine.page
@@ -59,23 +49,23 @@ def _attempt(engine: AmazonEngine, attempt: int) -> list:
 
     print(f"  page title  : {title!r}")
     print(f"  page url    : {url}")
-    print(f"  strategy    : {engine.last_strategy or '<none>'}")
 
-    counts = engine.selector_counts()
-    print("  selector counts:")
-    for sel, n in counts.items():
-        print(f"    {sel:<60} -> {n}")
+    # Count selectors so we can tell whether the SPA mounted.
+    for sel in (
+        "[class*='mainPart']",
+        "[class*='product-item']",
+        "a[class*='descriptionTitle']",
+        "a[href*='/p/']",
+    ):
+        try:
+            n = page.evaluate("(s) => document.querySelectorAll(s).length", sel)
+        except Exception as e:
+            n = f"<err {e}>"
+        print(f"    {sel:<40s} -> {n}")
 
     blocked_reason = check_blocked(page)
     if blocked_reason:
         print(f"  check_blocked   : {blocked_reason}")
-    if engine.last_status:
-        block_reason = engine.last_status.get("block_reason")
-        if block_reason:
-            print(f"  block_reason    : {block_reason!r}")
-        body_len = engine.last_status.get("body_len")
-        if body_len is not None:
-            print(f"  body length     : {body_len} chars")
 
     print(f"  results         : {len(results)}")
     return results
@@ -87,14 +77,14 @@ def main() -> int:
         format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
     )
 
-    print("=== Amazon search adapter test ===")
+    print("=== Icecat search adapter test ===")
     print(f"Query: {QUERY!r} | Limit: {LIMIT} | Max attempts: {MAX_ATTEMPTS}")
 
     cfg = core.BrowserConfig(headless=True, humanize=True)
     browser = core.launch(cfg)
     try:
         page = core.new_page(browser)
-        engine = AmazonEngine(page)
+        engine = IcecatEngine(page)
 
         results: list = []
         for attempt in range(1, MAX_ATTEMPTS + 1):
@@ -115,28 +105,38 @@ def main() -> int:
             print("\n=== FAIL === no results after all attempts", file=sys.stderr)
             return 1
 
-        assert len(results) > 0, "expected at least one Amazon result"
+        assert len(results) > 0, "expected at least one Icecat result"
 
-        print(f"\nReturned {len(results)} results (host: {engine.last_strategy})")
+        print(f"\nReturned {len(results)} results")
         print("\n--- Top 5 results ---")
         for i, r in enumerate(results[:5], start=1):
-            price = getattr(r, "price", "") or "<no price>"
-            rating = getattr(r, "rating", "") or "<no rating>"
-            reviews_count = getattr(r, "reviews_count", "") or "<no reviews>"
+            brand = getattr(r, "brand", "") or "<no brand>"
+            category = getattr(r, "category", "") or "<no category>"
             image_url = getattr(r, "image_url", "") or "<no image>"
-            asin = getattr(r, "asin", "") or "<no asin>"
+            specs = getattr(r, "specs", "") or "<no specs>"
+            product_code = getattr(r, "product_code", "") or "<no code>"
+            icecat_id = getattr(r, "icecat_id", "") or "<no id>"
 
             print(f"\n[{i}] {r.title}")
             print(f"    URL          : {r.url}")
-            print(f"    Price        : {price}")
-            print(f"    Rating       : {rating}")
-            print(f"    Reviews      : {reviews_count}")
+            print(f"    Brand        : {brand}")
+            print(f"    Category     : {category}")
+            print(f"    Product Code : {product_code}")
+            print(f"    Icecat ID    : {icecat_id}")
             print(f"    Image        : {image_url}")
-            print(f"    ASIN         : {asin}")
-            snippet = (r.snippet or "").replace("\n", " ")
-            if len(snippet) > 200:
-                snippet = snippet[:200] + "..."
-            print(f"    Snippet      : {snippet}")
+            specs_clean = specs.replace("\n", " ")
+            if len(specs_clean) > 200:
+                specs_clean = specs_clean[:200] + "..."
+            print(f"    Specs        : {specs_clean}")
+
+        # The task asks specifically for brand + category in the printout —
+        # also assert at least one result actually has those fields populated.
+        with_brand = sum(1 for r in results if getattr(r, "brand", ""))
+        with_cat = sum(1 for r in results if getattr(r, "category", ""))
+        print(f"\n  results with brand    : {with_brand}/{len(results)}")
+        print(f"  results with category : {with_cat}/{len(results)}")
+        assert with_brand > 0, "expected at least one result to have a brand"
+        assert with_cat > 0, "expected at least one result to have a category"
 
         print("\n=== PASS ===")
         return 0

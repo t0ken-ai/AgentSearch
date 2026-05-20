@@ -1,17 +1,19 @@
-"""Amazon search adapter test.
+"""Yelp search adapter test.
 
 What it does:
-1. Run AmazonEngine.search("mechanical keyboard") with up to 3 attempts.
-2. After each attempt dump diagnostics: page title, page url, host strategy,
-   selector counts, block reason (if any) — same shape as test_indeed.py.
+1. Run YelpEngine.search("best pizza", location="New York, NY") with up
+   to 3 attempts.
+2. After each attempt dump diagnostics: page title, page url, strategy,
+   selector counts, block reason (if any) — same shape as test_indeed.py
+   and test_amazon.py.
 3. PASS if at least one result comes back; otherwise FAIL with diagnostics.
-4. Print the top 5 results including price, rating, reviews_count, image_url
-   and ASIN.
+4. Print the top 5 results including rating, review_count, price_range,
+   category, address, and URL.
 
 Run:
     source ~/tools/cloakbrowser/venv/bin/activate
     cd /Users/gao/projects/AgentSearch
-    python tests/test_amazon.py
+    python tests/test_yelp.py
 """
 
 from __future__ import annotations
@@ -23,28 +25,29 @@ import time
 import traceback
 
 # Make sure the AgentSearch project root wins over any older editable install
-# of `cloak_stealth_suite` that might be registered in site-packages (e.g. the
-# stale copy at /Users/gao/projects/cloak-stealth-suite/), which would lack
-# this repo's `core` module and break the import below.
+# of `cloak_stealth_suite` that might be registered in site-packages.
 _PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if _PROJECT_ROOT not in sys.path:
     sys.path.insert(0, _PROJECT_ROOT)
 
 from cloak_stealth_suite import core
-from cloak_stealth_suite.engines.amazon import AmazonEngine
+from cloak_stealth_suite.engines.yelp import YelpEngine
 from cloak_stealth_suite.stealth.enhance import check_blocked
 
 
-QUERY = "mechanical keyboard"
+QUERY = "best pizza"
+LOCATION = "New York, NY"
 LIMIT = 10
 MAX_ATTEMPTS = 3
 
 
-def _attempt(engine: AmazonEngine, attempt: int) -> list:
+def _attempt(engine: YelpEngine, attempt: int) -> list:
     """Run a single search attempt and dump diagnostics. Returns the result list."""
     print(f"\n--- attempt {attempt}/{MAX_ATTEMPTS} ---")
-    # Bypass BaseEngine.search()'s retry loop so we can dump per-attempt
-    # diagnostics, exactly like test_indeed.py.
+    # Mirror test_indeed/test_amazon: stash location on the engine and call
+    # _do_search directly so we can dump per-attempt diagnostics without
+    # being swallowed by BaseEngine.search's outer retry loop.
+    engine._location = LOCATION
     results = engine._do_search(QUERY, LIMIT)
 
     page = engine.page
@@ -87,14 +90,15 @@ def main() -> int:
         format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
     )
 
-    print("=== Amazon search adapter test ===")
-    print(f"Query: {QUERY!r} | Limit: {LIMIT} | Max attempts: {MAX_ATTEMPTS}")
+    print("=== Yelp search adapter test ===")
+    print(f"Query: {QUERY!r} | Location: {LOCATION!r} | "
+          f"Limit: {LIMIT} | Max attempts: {MAX_ATTEMPTS}")
 
     cfg = core.BrowserConfig(headless=True, humanize=True)
     browser = core.launch(cfg)
     try:
         page = core.new_page(browser)
-        engine = AmazonEngine(page)
+        engine = YelpEngine(page)
 
         results: list = []
         for attempt in range(1, MAX_ATTEMPTS + 1):
@@ -115,27 +119,29 @@ def main() -> int:
             print("\n=== FAIL === no results after all attempts", file=sys.stderr)
             return 1
 
-        assert len(results) > 0, "expected at least one Amazon result"
+        assert len(results) > 0, "expected at least one Yelp result"
 
-        print(f"\nReturned {len(results)} results (host: {engine.last_strategy})")
+        print(f"\nReturned {len(results)} results (strategy: {engine.last_strategy})")
         print("\n--- Top 5 results ---")
         for i, r in enumerate(results[:5], start=1):
-            price = getattr(r, "price", "") or "<no price>"
             rating = getattr(r, "rating", "") or "<no rating>"
-            reviews_count = getattr(r, "reviews_count", "") or "<no reviews>"
-            image_url = getattr(r, "image_url", "") or "<no image>"
-            asin = getattr(r, "asin", "") or "<no asin>"
+            review_count = getattr(r, "review_count", "") or "<no reviews>"
+            price_range = getattr(r, "price_range", "") or "<no price>"
+            category = getattr(r, "category", "") or "<no category>"
+            address = getattr(r, "address", "") or "<no address>"
+            slug = getattr(r, "slug", "") or "<no slug>"
 
             print(f"\n[{i}] {r.title}")
             print(f"    URL          : {r.url}")
-            print(f"    Price        : {price}")
             print(f"    Rating       : {rating}")
-            print(f"    Reviews      : {reviews_count}")
-            print(f"    Image        : {image_url}")
-            print(f"    ASIN         : {asin}")
+            print(f"    Reviews      : {review_count}")
+            print(f"    Price        : {price_range}")
+            print(f"    Category     : {category}")
+            print(f"    Address      : {address}")
+            print(f"    Slug         : {slug}")
             snippet = (r.snippet or "").replace("\n", " ")
-            if len(snippet) > 200:
-                snippet = snippet[:200] + "..."
+            if len(snippet) > 220:
+                snippet = snippet[:220] + "..."
             print(f"    Snippet      : {snippet}")
 
         print("\n=== PASS ===")

@@ -24,6 +24,10 @@ supervisor*.log
 
 # Response files (test artifacts)
 response_*.txt
+response_*.html
+
+# Debug scripts (one-off DOM probes kept locally, never committed)
+tests/_debug_*.py
 
 # Test cache
 .pytest_cache/
