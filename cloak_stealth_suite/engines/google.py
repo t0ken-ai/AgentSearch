@@ -82,8 +82,13 @@ class GoogleEngine(BaseEngine):
             self._handle_consent()
             self._human_hints()
 
+        # Google's SERP is studded with ads, "People also ask" boxes and
+        # related-search panels — the `num=` request often returns 1-2 fewer
+        # organic results than asked. Over-request and trim later.
+        request_num = min(max(limit * 2, 10), 30)
+
         q = urllib.parse.quote(query)
-        url = f"{domain}/search?q={q}&hl=en&num={limit}"
+        url = f"{domain}/search?q={q}&hl=en&num={request_num}"
         log.info("[google] navigating to %s", url)
         if not safe_goto(self.page, url):
             return []
@@ -224,27 +229,55 @@ class GoogleEngine(BaseEngine):
         log.info("[google] using selector %s (%d items)", used, len(items))
 
         results: list[SearchResult] = []
-        for r in items[:limit]:
+        seen_urls: set[str] = set()
+        for r in items:
+            if len(results) >= limit:
+                break
             title_el = r.query_selector("h3")
             link_el = (
-                r.query_selector("a[href^='http']")
+                r.query_selector("a[jsname][href^='http']")  # newer Google
+                or r.query_selector("a[href^='http']")
                 or r.query_selector("a[href^='/url']")
             )
+            # Snippet selectors — kept broad to handle layout drift.
             snippet_el = r.query_selector(
-                ".VwiC3b, [data-sncf], .lEBKkf, span.aCOpRe"
+                ".VwiC3b, [data-sncf], .lEBKkf, span.aCOpRe, "
+                ".yXK7lf, .MUxGbd, div[data-snc], "
+                "div[role='presentation'] > span"
             )
 
             title = title_el.inner_text().strip() if title_el else ""
             href = link_el.get_attribute("href") if link_el else ""
             snippet = snippet_el.inner_text().strip() if snippet_el else ""
 
-            # Clean Google redirect URLs.
+            # Clean Google redirect URLs (/url?q=...&...).
             if href and href.startswith("/url?"):
                 parsed = urllib.parse.parse_qs(urllib.parse.urlparse(href).query)
                 href = parsed.get("q", [href])[0]
 
-            if title and href and "google.com" not in href:
-                results.append(SearchResult(title=title, url=href, snippet=snippet))
+            if not title or not href:
+                continue
+            if not href.startswith(("http://", "https://")):
+                continue
+            # Reject internal Google noise but keep real Google sub-services
+            # (workspace.google.com, store.google.com, etc.) that users may
+            # actually want as results — only block /url?, /search?, and
+            # accounts.google.com login flows.
+            host = urllib.parse.urlparse(href).hostname or ""
+            if host in ("www.google.com", "google.com") and (
+                "/search" in href or "/preferences" in href
+            ):
+                continue
+            if host in ("accounts.google.com", "support.google.com",
+                        "policies.google.com"):
+                continue
+
+            # Dedupe by URL.
+            if href in seen_urls:
+                continue
+            seen_urls.add(href)
+
+            results.append(SearchResult(title=title, url=href, snippet=snippet))
 
         return results
 
