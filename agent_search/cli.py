@@ -475,6 +475,54 @@ def cmd_search_many(args):
     return 0 if out["successful"] > 0 else 1
 
 
+# Preset engine bundles for common multi-site agent tasks. Each bundle is a
+# list of engine handles; `agentsearch <bundle> <query>` fans out across the
+# bundle and merges by URL with consensus signal.
+_BUNDLES: dict[str, list[str]] = {
+    # JobSpy-style jobs aggregator: fan out across the four major boards.
+    "jobs": ["linkedin_jobs", "indeed", "ziprecruiter", "glassdoor"],
+    # Generic research bundle: web + opinion + news + papers.
+    "research": ["duckduckgo", "google", "reddit", "hackernews"],
+    # News from credible Western outlets only.
+    "news": ["reuters", "apnews", "bbc", "guardian", "npr"],
+    # Code / dev research.
+    "code": ["github_search", "stackoverflow", "hackernews"],
+}
+
+
+def cmd_bundle(args):
+    """Run a preset multi-engine bundle (jobs, research, news, code, ...)."""
+    from .multi import search_many
+
+    bundle_name = args.command  # 'jobs' / 'research' / 'news' / 'code'
+    engines = _BUNDLES[bundle_name]
+    out = search_many(
+        args.query,
+        engines,
+        limit=args.limit,
+        headless=not args.visible,
+        timeout_s=args.timeout,
+    )
+    if args.json:
+        print(json.dumps(out, ensure_ascii=False, indent=2))
+        return 0 if out["successful"] > 0 else 1
+    print(
+        f"[{bundle_name}] query={args.query!r} "
+        f"successful={out['successful']}/{len(out['engines'])} "
+        f"elapsed={out['elapsed_s']}s"
+    )
+    print()
+    for i, r in enumerate(out["merged"][: args.limit * 2], 1):
+        tag = ",".join(r.get("engines") or [])
+        print(f"{i}. [{tag}] {r.get('title', '')}")
+        if r.get("url"):
+            print(f"   {r['url']}")
+        if r.get("snippet"):
+            print(f"   {r['snippet'][:200]}")
+        print()
+    return 0 if out["successful"] > 0 else 1
+
+
 def cmd_status(args):
     """Show per-engine health from the local sliding-window log."""
     from .health import HealthLog, DEFAULT_HEALTH_PATH
@@ -526,7 +574,7 @@ def cmd_status(args):
 def main():
     logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
 
-    parser = argparse.ArgumentParser(prog="cloak", description="AgentSearch CLI")
+    parser = argparse.ArgumentParser(prog="agentsearch", description="AgentSearch — local stealth-browser web search across 71+ sites for AI agents")
     sub = parser.add_subparsers(dest="command")
 
     # search
@@ -654,6 +702,18 @@ def main():
         help="Override the login URL (default: a known login URL for common sites)",
     )
 
+    # bundle subcommands (jobs / research / news / code)
+    for bundle_name, engines in _BUNDLES.items():
+        bp = sub.add_parser(
+            bundle_name,
+            help=f"Multi-engine bundle: fan out across {', '.join(engines)} and merge",
+        )
+        bp.add_argument("query", help="Search query")
+        bp.add_argument("--limit", "-n", type=int, default=5, help="Limit per engine")
+        bp.add_argument("--timeout", type=int, default=120, help="Total wall-clock timeout (s)")
+        bp.add_argument("--json", action="store_true", help="Output as JSON")
+        bp.add_argument("--visible", action="store_true")
+
     args = parser.parse_args()
     if not args.command:
         parser.print_help()
@@ -671,6 +731,8 @@ def main():
         sys.exit(cmd_status(args))
     elif args.command == "login":
         sys.exit(cmd_login(args))
+    elif args.command in _BUNDLES:
+        sys.exit(cmd_bundle(args))
     elif args.command == "test":
         sys.exit(cmd_test(args))
 
