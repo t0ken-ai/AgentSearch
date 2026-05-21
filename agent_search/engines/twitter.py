@@ -151,6 +151,20 @@ class TwitterEngine(BaseEngine):
     def _do_search(self, query: str, limit: int) -> list[SearchResult]:
         q = urllib.parse.quote(query)
 
+        # Phase 0: if we're logged into x.com (auth_token cookie present in
+        # the context), prefer x.com directly — logged-in search returns
+        # richer fields (full reply chain, view counts, quote tweets) that
+        # Nitter mirrors can't provide. This kicks in after the user has
+        # run `agentsearch login twitter` and passes --profile twitter.
+        if self._has_x_login():
+            log.info("[twitter] x.com auth_token detected — preferring x.com")
+            for tmpl in X_FALLBACKS:
+                results = self._try_x(tmpl.format(q=q), limit)
+                if results:
+                    self._last_mode = "x_authed"
+                    return results
+            log.info("[twitter] authed x.com returned nothing — falling back to Nitter")
+
         # Phase 1: try every Nitter mirror in order.
         for base in NITTER_INSTANCES:
             results = self._try_nitter(base, q, limit)
@@ -158,7 +172,7 @@ class TwitterEngine(BaseEngine):
                 self._last_mode = "nitter"
                 return results
 
-        # Phase 2: x.com / twitter.com fallback.
+        # Phase 2: x.com / twitter.com fallback (anonymous, often empty).
         for tmpl in X_FALLBACKS:
             results = self._try_x(tmpl.format(q=q), limit)
             if results:
@@ -166,6 +180,27 @@ class TwitterEngine(BaseEngine):
                 return results
 
         return []
+
+    # -------------------------------------------------------- login detection
+
+    def _has_x_login(self) -> bool:
+        """Check whether the current browser context carries an x.com login.
+
+        Looks for the ``auth_token`` cookie scoped to x.com / twitter.com.
+        Only present when the user has signed in (e.g., via
+        ``agentsearch login twitter``) and the calling CLI has wired the
+        same persistent profile through ``--profile twitter``.
+        """
+        try:
+            ctx = self.page.context
+            cookies = ctx.cookies(["https://x.com", "https://twitter.com"])
+        except Exception:
+            return False
+        for c in cookies or []:
+            name = c.get("name") if isinstance(c, dict) else None
+            if name == "auth_token":
+                return True
+        return False
 
     # ------------------------------------------------------------------ nitter
 

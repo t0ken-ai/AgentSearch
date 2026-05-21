@@ -74,7 +74,21 @@ and the realization that CloakBrowser already supports `launch_persistent_contex
 | P1.5-D | **Jobs aggregator (`agentsearch jobs ...`)** | ✅ | Done. New CLI bundle subcommands: `jobs` (linkedin_jobs+indeed+ziprecruiter+glassdoor), `research` (ddg+google+reddit+hackernews), `news` (reuters+ap+bbc+guardian+npr), `code` (github+stackoverflow+hackernews). Reuses search_many fan-out + merge logic. New ZipRecruiter and Glassdoor engines added with Cloudflare-aware waits — these have skeletons in place but DOM selectors will need iterative tuning as the sites A/B test their layouts. |
 | P1.5-E | **Twitter/X structured improvements** | ⏳ | Existing `twitter.py` already uses Nitter mirrors with fallback; with P1.5-A done, future work is to detect a `--profile twitter` and route through x.com's logged-in advanced search instead of Nitter for richer fields (replies, quote tweets, view counts). Deferred — current Nitter route works for most queries. |
 
-### 💡 P2 — backlog
+### 🔭 P2 — long-term
+
+These are tracked separately from P1.5 because each one is multi-day and
+the value depends on adoption signals from the P0/P1 stack landing first.
+
+| # | Item | Status | Notes |
+|---|---|---|---|
+| **P2-LT-A** | Twitter/X login enhancement | ✅ | `twitter.py` now detects the `auth_token` cookie via `BrowserContext.cookies()` and routes through x.com/search **before** Nitter when present. Anonymous flow unchanged (still tries Nitter mirrors first). Verified: anon search returns Nitter results; authed path triggers when `--profile twitter` carries an `auth_token`. |
+| **P2-LT-B** | LinkedIn adapter | ✅ | New `agent_search/engines/linkedin.py` (284 lines). Detects `li_at` cookie. Authed path uses `/search/results/people/` and parses entity-result cards (name / headline / location / current_company). Anon path falls through to `/pub/dir` with explicit warning. Iterative DOM tuning will be needed as LinkedIn re-mangles class names. |
+| **P2-LT-C** | Booking.com hotel adapter | ✅ | New `engines/booking.py` (239 lines). Anonymous SERP works — verified "kyoto" returns 3 hotels with score 9.0-9.3 and 1k-5k reviews. Returns name / url / rating / review_count / price / area / stars. CloakBrowser passes Booking's DataDome challenge cleanly. |
+| **P2-LT-D** | Expedia hotel adapter | ⚠️ skeleton | New `engines/expedia.py` (191 lines). Implementation in place but Expedia's DataDome variant returns "Bot or Not?" wall on direct ?destination= queries — needs entry-point flow (visit homepage, type into search box, submit). Marked TODO; bundle excludes it for now. |
+| **P2-LT-E** | Skyscanner flights | ⏳ deferred | Skyscanner needs structured airport codes + dates rather than free-text — doesn't fit the SearchResult shape cleanly. Better as a separate `flights` tool than a search engine. |
+| **P2-LT-F** | New CLI bundle: `travel` | ✅ | `agentsearch travel "<destination>"` fans out to booking + expedia (expedia returns 0 until P2-LT-D fixed; booking carries the bundle today). |
+
+### 💡 P2 — other backlog
 
 | # | Item | Why it matters |
 |---|---|---|
@@ -82,7 +96,7 @@ and the realization that CloakBrowser already supports `launch_persistent_contex
 | P2-2 | Nightly canary CI for all 71 engines | Auto-detect DOM drift; auto-file GitHub issue on regression |
 | P2-3 | More AI / dev high-traffic engines | `docs.python.org`, MDN, `crates.io`, HF Spaces, Kaggle, Papers with Code, Phind, Perplexity, OpenReview, Semantic Scholar |
 | P2-4 | Optional `serve --http` mode | For team agents running in cloud / docker without local Chromium; self-hosted only — never a managed SaaS |
-| P2-5 | Travel sites: `booking` / `expedia` / `skyscanner` | DataDome heavy, CloakBrowser is one of few options that works. Big agent use-case (trip planning). |
+| P2-5 | Travel sites (rolled into P2-LT-C/D, partial) | Booking ✅, Expedia ⚠️, Skyscanner deferred |
 | P2-6 | Financial sites: `tradingview` / `yahoo_finance` | Once P1.5-A login lands, financial-data agents become tractable |
 | P2-7 | `chrome-devtools-mcp` interop (Path B, demoted) | Originally proposed as our login path; demoted because P1.5-A (persistent CloakBrowser profile) is strictly better (keeps stealth). Still useful for "use my CURRENT logged-in Chrome" zero-friction case — keep as opt-in alternative. |
 | P2-8 | Launch blog → Show HN → r/LocalLLaMA / r/ChatGPTCoding / r/openclaw | Direct line to the three HN viral pain-point posts (#43936992, #43921238, #46822822). Soft-recommend in firecrawl/exa MCP issue threads when users complain about cost. |

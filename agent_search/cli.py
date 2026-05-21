@@ -487,6 +487,11 @@ _BUNDLES: dict[str, list[str]] = {
     "news": ["reuters", "apnews", "bbc", "guardian", "npr"],
     # Code / dev research.
     "code": ["github_search", "stackoverflow", "hackernews"],
+    # Travel / hotel search across major aggregators (DataDome heavy —
+    # CloakBrowser is one of few stacks that bypasses both reliably).
+    # Skyscanner left out for now: free-text queries don't map cleanly
+    # to its structured origin/destination/dates input.
+    "travel": ["booking", "expedia"],
 }
 
 
