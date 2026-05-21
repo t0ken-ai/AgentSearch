@@ -1,82 +1,89 @@
 """CLI tool for Cloak Stealth Suite."""
 
 import argparse
+import importlib
+import inspect
 import json
 import logging
+import pkgutil
 import sys
+from functools import lru_cache
 
 from .core import launch, new_page, BrowserConfig
 
-# Lazy imports to avoid import errors for engines not yet created
-ENGINE_REGISTRY = {
-    "google": ".engines.google:GoogleEngine",
-    "bing": ".engines.bing:BingEngine",
-    "duckduckgo": ".engines.duckduckgo:DuckDuckGoEngine",
-    "ddg": ".engines.duckduckgo:DuckDuckGoEngine",
-    "reddit": ".engines.reddit:RedditEngine",
-    "twitter": ".engines.twitter:TwitterEngine",
-    "x": ".engines.twitter:TwitterEngine",
-    "stackoverflow": ".engines.stackoverflow:StackOverflowEngine",
-    "hackernews": ".engines.hackernews:HackerNewsEngine",
-    "github": ".engines.github_search:GitHubSearchEngine",
-    "medium": ".engines.medium:MediumSearchEngine",
-    "quora": ".engines.quora:QuoraSearchEngine",
-    "producthunt": ".engines.producthunt:ProductHuntSearchEngine",
-    "blackhatworld": ".engines.blackhatworld:BlackHatWorldEngine",
-    "wikipedia": ".engines.wikipedia:WikipediaEngine",
-    "wikivoyage": ".engines.wikivoyage:WikivoyageEngine",
-    "yandex": ".engines.yandex:YandexEngine",
-    # Round 2 engines (may not exist yet)
-    "steam": ".engines.steam:SteamEngine",
-    "1337x": ".engines.torrent_1337x:Torrent1337xEngine",
-    "google_patents": ".engines.google_patents:GooglePatentsEngine",
-    "linkedin_jobs": ".engines.linkedin_jobs:LinkedInJobsEngine",
-    "indeed": ".engines.indeed:IndeedEngine",
-    "virustotal": ".engines.virustotal:VirusTotalEngine",
-    "icecat": ".engines.icecat:IcecatEngine",
-    "amazon": ".engines.amazon:AmazonEngine",
-    "brave": ".engines.brave:BraveEngine",
-    "wolfram": ".engines.wolfram:WolframEngine",
-    "archive": ".engines.archive_org:ArchiveOrgEngine",
-    "devto": ".engines.devto:DevToEngine",
-    "npm": ".engines.npm_search:NpmSearchEngine",
-    # Round 3: camofox-browser 竞品对齐
-    "youtube": ".engines.youtube:YouTubeEngine",
-    "yelp": ".engines.yelp:YelpEngine",
-    "spotify": ".engines.spotify:SpotifyEngine",
-    "tiktok": ".engines.tiktok:TikTokEngine",
-    "instagram": ".engines.instagram:InstagramEngine",
-    "twitch": ".engines.twitch:TwitchEngine",
-    "netflix": ".engines.netflix:NetflixEngine",
-    "reddit_sub": ".engines.reddit_subreddit:RedditSubredditEngine",
-    # Round 4: union-search-skill 竞品对齐
-    "baidu": ".engines.baidu:BaiduEngine",
-    "sogou": ".engines.sogou:SogouEngine",
-    "so360": ".engines.so360:So360Engine",
-    "startpage": ".engines.startpage:StartpageEngine",
-    "ecosia": ".engines.ecosia:EcosiaEngine",
-    "qwant": ".engines.qwant:QwantEngine",
-    "bilibili": ".engines.bilibili:BilibiliEngine",
-    "zhihu": ".engines.zhihu:ZhihuEngine",
-    "xiaohongshu": ".engines.xiaohongshu:XiaohongshuEngine",
-    "douyin": ".engines.douyin:DouyinEngine",
-    "weibo": ".engines.weibo:WeiboEngine",
-    "toutiao": ".engines.toutiao:ToutiaoEngine",
-    "unsplash": ".engines.unsplash:UnsplashEngine",
-    "pixabay": ".engines.pixabay:PixabayEngine",
-    "pexels": ".engines.pexels:PexelsEngine",
-    "xiaoyuzhou": ".engines.xiaoyuzhou:XiaoyuzhouEngine",
+# Explicit short-alias map. Maps `--engine` value → `(module, class)`.
+# Anything NOT in here is auto-discovered from cloak_stealth_suite/engines/.
+_ALIASES: dict[str, tuple[str, str]] = {
+    # Common short aliases.
+    "ddg":         ("duckduckgo",        "DuckDuckGoEngine"),
+    "x":           ("twitter",           "TwitterEngine"),
+    "github":      ("github_search",     "GitHubSearchEngine"),
+    "npm":         ("npm_search",        "NpmSearchEngine"),
+    "archive":     ("archive_org",       "ArchiveOrgEngine"),
+    "1337x":       ("torrent_1337x",     "Torrent1337xEngine"),
+    "reddit_sub":  ("reddit_subreddit",  "RedditSubredditEngine"),
 }
 
 
+@lru_cache(maxsize=1)
+def _engine_registry() -> dict[str, tuple[str, str]]:
+    """Discover every BaseEngine subclass under cloak_stealth_suite.engines.
+
+    Returns a mapping from canonical short name (module basename) to a
+    ``(module_path, class_name)`` tuple. The discovery is cached after the
+    first call so subsequent ``--engine`` lookups are O(1).
+    """
+    from .engines.base import BaseEngine
+    from . import engines as engines_pkg
+
+    registry: dict[str, tuple[str, str]] = {}
+
+    # 1) Auto-discover.
+    for finder, modname, ispkg in pkgutil.iter_modules(engines_pkg.__path__):
+        if modname.startswith("_") or modname == "base":
+            continue
+        full = f"cloak_stealth_suite.engines.{modname}"
+        try:
+            mod = importlib.import_module(full)
+        except Exception as e:
+            logging.warning("[cli] failed to import %s: %s", full, e)
+            continue
+        for cls_name, cls in inspect.getmembers(mod, inspect.isclass):
+            if cls is BaseEngine:
+                continue
+            if not issubclass(cls, BaseEngine):
+                continue
+            if cls.__module__ != full:
+                continue  # Only register classes defined in their own module.
+            # Use the engine's `name` attr if defined, else the module basename.
+            handle = getattr(cls, "name", None) or modname
+            registry.setdefault(handle, (modname, cls_name))
+            registry.setdefault(modname, (modname, cls_name))
+
+    # 2) Apply explicit aliases on top so they always win.
+    for alias, target in _ALIASES.items():
+        registry[alias] = target
+
+    return registry
+
+
 def _get_engine(name: str):
-    """Lazily load an engine class."""
-    spec = ENGINE_REGISTRY.get(name)
-    if not spec:
-        raise ValueError(f"Unknown engine: {name}. Available: {', '.join(sorted(set(ENGINE_REGISTRY.values())))}")
-    module_path, class_name = spec.rsplit(":", 1)
-    import importlib
-    module = importlib.import_module(module_path, package="cloak_stealth_suite")
+    reg = _engine_registry()
+    spec = reg.get(name)
+    if spec is None:
+        # Try a relaxed match — strip non-alphanumeric, lowercase.
+        norm = "".join(ch for ch in name.lower() if ch.isalnum())
+        for k, v in reg.items():
+            if "".join(ch for ch in k.lower() if ch.isalnum()) == norm:
+                spec = v
+                break
+    if spec is None:
+        available = ", ".join(sorted(reg.keys()))
+        raise ValueError(f"Unknown engine: {name!r}. Available: {available}")
+    module_basename, class_name = spec
+    module = importlib.import_module(
+        f"cloak_stealth_suite.engines.{module_basename}"
+    )
     return getattr(module, class_name)
 
 
@@ -122,22 +129,14 @@ def cmd_extract(args):
 
 def cmd_list_engines(args):
     """List all available engines."""
-    available = []
-    unavailable = []
-    for name in sorted(set(ENGINE_REGISTRY.keys())):
+    reg = _engine_registry()
+    print(f"Available engines ({len(reg)} aliases / {len(set(reg.values()))} unique):")
+    for name in sorted(reg.keys()):
         try:
             _get_engine(name)
-            available.append(name)
-        except (ImportError, AttributeError):
-            unavailable.append(name)
-
-    print("Available engines:")
-    for name in available:
-        print(f"  ✅ {name}")
-    if unavailable:
-        print("\nNot yet implemented:")
-        for name in unavailable:
-            print(f"  ⏳ {name}")
+            print(f"  ✅ {name}")
+        except (ImportError, AttributeError) as e:
+            print(f"  ⏳ {name}  ({e})")
 
 
 def cmd_test(args):
