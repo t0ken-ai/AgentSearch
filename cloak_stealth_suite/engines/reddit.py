@@ -49,6 +49,13 @@ THING_SELECTORS = [
 ]
 
 # Phrases that indicate Reddit blocked us / rate-limited / Cloudflare gate.
+#
+# IMPORTANT: these are matched ONLY against (a) the page URL, (b) the <title>,
+# and (c) the inner-text of specific error-container selectors — never against
+# the full page body. Reddit's search page echoes the user query back near the
+# top of the body (e.g. "search results for: <query>"), so scanning the body
+# would false-positive whenever the user's query happens to contain any of the
+# words below (e.g. searching for "GitHub rate limit" used to break here).
 BLOCK_PHRASES = [
     "you're doing that too much",
     "you are doing that too much",
@@ -59,9 +66,46 @@ BLOCK_PHRASES = [
     "verify you are human",
     "checking your browser",
     "access denied",
-    "forbidden",
+    "you've been blocked by network security",
     "sorry, this content is unavailable",
+]
+
+# A subset of the above that is safe to match against the <title> alone — these
+# strings only appear in titles when Reddit is genuinely returning a block /
+# error page. ("forbidden" alone is too generic to live here; "rate limit"
+# never appears in a normal Reddit search title.)
+TITLE_BLOCK_PHRASES = [
+    "you're doing that too much",
+    "you are doing that too much",
+    "too many requests",
+    "rate limit",
+    "rate-limit",
+    "access denied",
     "blocked",
+    "forbidden",
+    "checking your browser",
+]
+
+# URL fragments that indicate we got bounced to a block / interstitial page.
+BLOCK_URL_FRAGMENTS = [
+    "/over18",
+    "/blocked",
+    "/quarantine",
+    "challenge.cloudflare",
+    "/login?dest=",  # forced-login redirect when search is rate-limited
+]
+
+# Specific containers that, on old.reddit.com, only ever exist on error pages.
+# We scan their inner text against BLOCK_PHRASES; this is much narrower than
+# scanning the entire <body>, which would echo the user's search query.
+ERROR_CONTAINER_SELECTORS = [
+    ".error-page",
+    ".error",
+    "#error",
+    ".interstitial",
+    ".message",
+    "h1.error",
+    "div.error",
 ]
 
 # Buttons to click to dismiss any login / signup interstitial that might
@@ -206,7 +250,29 @@ class RedditEngine(BaseEngine):
                 continue
 
     def _is_blocked(self) -> bool:
-        """Detect rate-limit / Cloudflare / blocked interstitials."""
+        """Detect rate-limit / Cloudflare / blocked interstitials.
+
+        We deliberately avoid scanning the full <body> text because the search
+        page echoes the user's query back into the body (e.g. "search results
+        for: <query>"). That would cause every query containing words like
+        "rate limit" or "blocked" to false-positive as a block.
+
+        Instead we use three narrow, query-independent signals:
+          1. The presence of any result container → definitely NOT blocked.
+          2. The page URL → block / login-redirect / Cloudflare paths.
+          3. The page title → short, doesn't echo the query.
+          4. The inner-text of error-only containers (.error, .interstitial...).
+        """
+        # Signal 1: if any result container is present, we're on a normal
+        # search results page (even if the result count is 0). Bail early.
+        for sel in RESULT_SELECTORS + THING_SELECTORS:
+            try:
+                if self.page.query_selector_all(sel):
+                    self.last_status = {"block_reason": None, "results_present": True}
+                    return False
+            except Exception:
+                pass
+
         try:
             url = (self.page.url or "").lower()
         except Exception:
@@ -215,24 +281,48 @@ class RedditEngine(BaseEngine):
             title = (self.page.title() or "").lower()
         except Exception:
             title = ""
-        try:
-            body = self.page.inner_text("body").lower()
-        except Exception:
-            body = ""
 
         self.last_status = {
             "url": url,
             "title": title,
-            "body_len": len(body),
         }
 
-        for phrase in BLOCK_PHRASES:
-            if phrase in title or phrase in body[:2000]:
-                # Limit the body window so a long results page that happens to
-                # contain "blocked" inside a comment doesn't trip the detector.
-                log.warning("[reddit] block phrase detected: %r", phrase)
-                self.last_status["block_reason"] = phrase
+        # Signal 2: URL-based detection (most reliable).
+        for frag in BLOCK_URL_FRAGMENTS:
+            if frag in url:
+                log.warning("[reddit] block URL fragment detected: %r", frag)
+                self.last_status["block_reason"] = f"url:{frag}"
                 return True
+
+        # Signal 3: title-based detection (titles are short, don't echo query).
+        for phrase in TITLE_BLOCK_PHRASES:
+            if phrase in title:
+                log.warning("[reddit] block title phrase detected: %r", phrase)
+                self.last_status["block_reason"] = f"title:{phrase}"
+                return True
+
+        # Signal 4: scan ONLY the inner-text of known error containers, not
+        # the whole body. These containers don't exist on a normal search page.
+        for err_sel in ERROR_CONTAINER_SELECTORS:
+            try:
+                el = self.page.query_selector(err_sel)
+                if not el:
+                    continue
+                err_text = (el.inner_text() or "").lower()
+            except Exception:
+                continue
+            if not err_text:
+                continue
+            for phrase in BLOCK_PHRASES:
+                if phrase in err_text:
+                    log.warning(
+                        "[reddit] block phrase %r detected in %s",
+                        phrase,
+                        err_sel,
+                    )
+                    self.last_status["block_reason"] = f"{err_sel}:{phrase}"
+                    return True
+
         return False
 
     # ---------------------------------------------------------------- extraction
