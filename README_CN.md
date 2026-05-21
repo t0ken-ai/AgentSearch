@@ -6,11 +6,11 @@
 
 # **免费 · 本地 · 隐私 · 绕过 Cloudflare**
 
-**一个 Python 包。71 个网站。零 API Key。零数据外泄。**
+**一个 Python 包。80 个网站。零 API Key。零数据外泄。**
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Python 3.9+](https://img.shields.io/badge/Python-3.9+-blue.svg)](https://www.python.org/)
-[![Sites: 71](https://img.shields.io/badge/网站数-71-success.svg)]()
+[![Sites: 80](https://img.shields.io/badge/网站数-80-success.svg)]()
 [![No API Key](https://img.shields.io/badge/无需-API%20Key-success.svg)]()
 [![Local Only](https://img.shields.io/badge/数据-永远在本机-orange.svg)]()
 [![Bypasses Cloudflare](https://img.shields.io/badge/绕过-Cloudflare%20%2F%20PerimeterX%20%2F%20Akamai-red.svg)]()
@@ -29,13 +29,40 @@
 ```bash
 pip install cloakbrowser && pip install -e .
 
+# 任意 80 个站点搜索
 agentsearch search "人工智能新闻"     --engine google --json
 agentsearch search "Python 教程"      --engine bilibili --limit 10
 agentsearch search "推荐笔记本 2025"  --engine reddit
 agentsearch search "transformer 注意力" --engine arxiv
+
+# 一次拿 SERP + 顶部 N 条正文
+agentsearch search "MCP 网页搜索" --engine hackernews --limit 5 --depth 3 --json
+
+# 多引擎并行扇出 + URL 去重合并
+agentsearch search-many "AgentSearch" --engines google,reddit,hackernews,arxiv --merged
+
+# 预设 bundle:一键多站融合
+agentsearch jobs    "数据工程师"          # linkedin_jobs+indeed+ziprecruiter+glassdoor
+agentsearch travel  "京都"                # booking + expedia
+agentsearch news    "美联储利率决议"      # reuters+ap+bbc+guardian+npr
+agentsearch code    "kubernetes ingress"  # github+stackoverflow+HN
+agentsearch research "扩散 transformer"   # ddg+google+reddit+HN
+
+# 登录态站点:登录一次,后续永久复用
+agentsearch login twitter
+agentsearch search "from:openai" --engine twitter --profile twitter --limit 20
+
+# 抓 URL 转 Markdown(readability + 自动滚动)
+agentsearch extract "https://news.ycombinator.com/item?id=43936992" --json
+
+# 跑 MCP server 给 Cursor / Cline / Claude Desktop / OpenClaw / Continue 用
+python -m agent_search.mcp_server
+
+# 或者跑成自托管 HTTP API,云端 / Docker 里的 agent 也能用
+python -m agent_search.serve --port 8088
 ```
 
-71 个站点。一个 CLI。**完全跑在你的机器上。绕过 Cloudflare、PerimeterX、Akamai、DataDome 以及所有已知的指纹检测系统。**
+80 个站点 · CLI · MCP server · HTTP API · 完全跑在你的机器上。**绕过 Cloudflare、PerimeterX、Akamai、DataDome 以及所有已知的指纹检测系统。**
 
 ---
 
@@ -74,7 +101,7 @@ agentsearch search "transformer 注意力" --engine arxiv
 | 🌐 数据是否离开本机                       | **永远不会** | 每次请求都发到云 | 不会 | 取决于实例 |
 | 🛡️ **能绕过 Cloudflare**                  | ✅ **C++ 级补丁** | 不适用（API 调用） | ❌ 秒被识别 | ❌ 仅 HTTP |
 | 🔬 **能通过指纹检测**                       | ✅ 全部主流 | 不适用 | ❌ CreepJS 直接挂 | ❌ |
-| 🌍 支持网站数                             | **71 个** | 1 个（Google） | 你自己写 | 聚合大概 10 个 SE |
+| 🌍 支持网站数                             | **80 个** | 1 个（Google） | 你自己写 | 聚合大概 10 个 SE |
 | 🐍 JavaScript 渲染                        | ✅ 完整 Chromium | ❌ 仅 API | ✅ | ❌ 仅 HTTP |
 | 🔐 需登录的网站                           | ✅ Cookie 导入 | ❌ | 有限 | ❌ |
 | 🚀 部署                                   | `pip install` | 注册 + 申请 key | 从零写代码 | Docker + 配置 |
@@ -82,7 +109,7 @@ agentsearch search "transformer 注意力" --engine arxiv
 
 ---
 
-## 🌍 全部 71 个站点 — 按类目
+## 🌍 全部 80 个站点 — 按类目
 
 > 每个站点都是一个独立的适配器（`agent_search/engines/<name>.py`），并附带可独立运行的测试（`tests/test_<name>.py`）。
 
@@ -213,7 +240,7 @@ finally:
 cp -r skills/agent-search ~/.openclaw/workspace/skills/
 ```
 
-完成后你的 OpenClaw / Codex / Kiro Agent 就**原生知道**怎么搜 71 个站点了 — 不用写胶水代码、不用调 prompt。
+完成后你的 OpenClaw / Codex / Kiro Agent 就**原生知道**怎么搜 80 个站点了 — 不用写胶水代码、不用调 prompt。
 
 ---
 

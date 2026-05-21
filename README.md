@@ -6,11 +6,11 @@
 
 # **Free. Local. Private. Bypasses Cloudflare.**
 
-**One Python package. 71 websites. Zero API keys. Zero data leakage.**
+**One Python package. 80 websites. Zero API keys. Zero data leakage.**
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Python 3.9+](https://img.shields.io/badge/Python-3.9+-blue.svg)](https://www.python.org/)
-[![Sites: 71](https://img.shields.io/badge/Sites-71-success.svg)]()
+[![Sites: 80](https://img.shields.io/badge/Sites-80-success.svg)]()
 [![No API Key](https://img.shields.io/badge/No%20API%20Key-Required-success.svg)]()
 [![Local Only](https://img.shields.io/badge/Data-Stays%20on%20Your%20Machine-orange.svg)]()
 [![Bypasses Cloudflare](https://img.shields.io/badge/Bypasses-Cloudflare%20%2F%20PerimeterX%20%2F%20Akamai-red.svg)]()
@@ -29,20 +29,40 @@
 ```bash
 pip install cloakbrowser && pip install -e .
 
-# Search 71 sites
+# Search any of 80 sites
 agentsearch search "what's new in transformers" --engine google --json
 agentsearch search "react hooks tutorial"     --engine youtube --limit 10
 agentsearch search "best laptop 2025"         --engine reddit
 agentsearch search "transformer attention"    --engine arxiv
 
-# Extract a URL as clean Markdown (readability + auto-scroll for lazy content)
+# One-shot: SERP + auto-extract markdown body of the top 3 hits
+agentsearch search "MCP web search" --engine hackernews --limit 5 --depth 3 --json
+
+# Multi-engine fan-out (parallel + URL-deduped)
+agentsearch search-many "AgentSearch project" --engines google,reddit,hackernews,arxiv --merged
+
+# Preset bundles for common agent tasks
+agentsearch jobs    "data engineer"            # linkedin_jobs + indeed + ziprecruiter + glassdoor
+agentsearch travel  "kyoto"                    # booking + expedia
+agentsearch news    "fed rate decision"        # reuters + ap + bbc + guardian + npr
+agentsearch code    "kubernetes ingress"       # github + stackoverflow + HN
+agentsearch research "diffusion transformer"   # ddg + google + reddit + HN
+
+# Login-walled sites: log in once, reuse the session forever
+agentsearch login twitter
+agentsearch search "from:openai" --engine twitter --profile twitter --limit 20
+
+# Extract a URL as clean Markdown
 agentsearch extract "https://news.ycombinator.com/item?id=43936992" --json
 
-# Or run as an MCP server for Cursor / Cline / Claude Desktop / OpenClaw / Continue
+# Run as an MCP server for Cursor / Cline / Claude Desktop / OpenClaw / Continue
 python -m agent_search.mcp_server
+
+# Or as a self-hosted HTTP API for cloud / Docker agents
+python -m agent_search.serve --port 8088
 ```
 
-71 sites. One CLI. One MCP server. Runs entirely on your machine. **Bypasses Cloudflare, PerimeterX, Akamai, DataDome, and every fingerprint test we know of.**
+80 stealth sites · CLI · MCP server · HTTP API · runs entirely on your machine. **Bypasses Cloudflare, PerimeterX, Akamai, DataDome, and every fingerprint test we know of.**
 
 ---
 
@@ -83,7 +103,7 @@ The web search landscape for AI agents in 2026 is unpleasant. Hosted APIs are ge
 | 🚦 **Rate limit**                        | **None** | 1k/mo free → paid | 500/mo free → paid | 1k/mo free → paid | 2k/mo @ 1 TPS | None (DDG-side) | None | None |
 | ⚖️ **TOS allows AI use**                 | ✅ Yes | ✅ | ✅ | ✅ | ❌ **Forbidden** | ✅ | ✅ | ✅ |
 | 🔌 **MCP server included**               | ✅ Yes | ⚠️ Third-party | ✅ Official | ✅ Official | ⚠️ Third-party | ✅ | ❌ | ❌ |
-| 🌍 **Sites supported**                   | **71** | 1 (web index) | 1 (web index) | 1 (neural index) | 1 (web index) | 1 | ~10 SE aggregator | DIY |
+| 🌍 **Sites supported**                   | **80** | 1 (web index) | 1 (web index) | 1 (neural index) | 1 (web index) | 1 | ~10 SE aggregator | DIY |
 | 🛡️ **Bypasses Cloudflare**               | ✅ **C++ patches** | N/A (uses APIs) | N/A | N/A | N/A | ❌ | ❌ HTTP-only | ❌ Detected instantly |
 | 🐍 **JS rendering**                      | ✅ Full Chromium | ❌ API-only | ✅ | ❌ | ❌ | ❌ | ❌ | ✅ |
 | 🌐 **Data leaves your machine**          | **Never** | Always | Always | Always | Always | Always | Depends | Never |
@@ -93,7 +113,7 @@ The web search landscape for AI agents in 2026 is unpleasant. Hosted APIs are ge
 
 ---
 
-## 🌍 The 71 Sites — Categorized
+## 🌍 The 80 Sites — Categorized
 
 > Every site is implemented as a self-contained adapter (`agent_search/engines/<name>.py`) with a runnable test (`tests/test_<name>.py`).
 
@@ -107,14 +127,14 @@ Google · Bing · DuckDuckGo · Yandex · Brave · Baidu · Sogou · 360 Search 
 **💻 Code & Dev (5)**
 GitHub · StackOverflow · Hacker News · NPM · dev.to
 
-**🤖 AI & Research (2)**
-HuggingFace · arXiv
+**🤖 AI & Research (3)**
+HuggingFace · arXiv · Semantic Scholar
 
-**📚 Knowledge (4)**
-Wikipedia · Wikivoyage · PubMed · Wolfram Alpha
+**📚 Knowledge (5)**
+Wikipedia · Wikivoyage · PubMed · Wolfram Alpha · MDN Web Docs
 
-**💬 Social & Forum (6)**
-Reddit · Reddit Subreddit (JSON) · Twitter/X · Quora · BlackHatWorld · Instagram
+**💬 Social & Forum (7)**
+Reddit · Reddit Subreddit (JSON) · Twitter/X · LinkedIn · Quora · BlackHatWorld · Instagram
 
 **🇨🇳 Chinese Platforms (6)**
 Zhihu · Weibo · Xiaohongshu · Douyin · Toutiao · Bilibili
@@ -140,8 +160,14 @@ Medium · Product Hunt
 **🛒 E-commerce & Shopping (4)**
 Amazon · eBay · Icecat · Steam
 
-**💼 Jobs & Local (3)**
-LinkedIn Jobs · Indeed · Yelp
+**💼 Jobs & Local (5)**
+LinkedIn Jobs · Indeed · Yelp · ZipRecruiter · Glassdoor
+
+**🗺️ Maps & Travel (3)**
+Google Maps · Booking · Expedia
+
+**💰 Finance (1)**
+Yahoo Finance
 
 **📜 Patents & Security (2)**
 Google Patents · VirusTotal
@@ -156,7 +182,7 @@ Unsplash · Pixabay · Pexels · Pinterest
 </tr>
 </table>
 
-> *And growing — new adapters are added continuously.*
+> *And growing — new adapters are added continuously. Run `agentsearch list-engines` to see the live count.*
 
 ---
 
@@ -224,7 +250,7 @@ finally:
 cp -r skills/agent-search ~/.openclaw/workspace/skills/
 ```
 
-Now your OpenClaw / Codex / Kiro agent natively knows how to search 71 sites — no plumbing, no prompts.
+Now your OpenClaw / Codex / Kiro agent natively knows how to search 80 sites — no plumbing, no prompts.
 
 ---
 
@@ -290,11 +316,75 @@ OpenClaw will auto-load the skill and the agent will reach for AgentSearch whene
 
 | Tool | What it does | When to call |
 |---|---|---|
-| ``search(query, engine, limit)`` | Run one of 71 search engines | Any time you need fresh web hits |
+| ``search(query, engine, limit)`` | Run one of 80 search engines | Any time you need fresh web hits |
 | ``extract(url, paginate, max_scrolls)`` | Fetch a URL, return Markdown + metadata | After ``search`` returns a hit you want to read |
 | ``list_engines()`` | Enumerate engines + categories | When you're not sure which engine to use |
 
 The server keeps a single Chromium alive across calls and recycles it every 25 calls (configurable via ``AGENTSEARCH_RECYCLE_AFTER``), so each tool call after the first costs <100ms of overhead instead of the full ~1.5s startup.
+
+---
+
+## 🌐 Self-hosted HTTP API (`agentsearch.serve`)
+
+When MCP isn't available — cloud workers, Docker containers, scripts on remote machines, custom HTTP-only frameworks — run AgentSearch as a tiny HTTP server. Same engine pool, same stealth, simple JSON API.
+
+```bash
+# Localhost only (no auth needed):
+python -m agent_search.serve --port 8088
+
+# Bound to the network (auth required):
+AGENTSEARCH_TOKEN=mysecret python -m agent_search.serve --host 0.0.0.0 --port 8088
+```
+
+Endpoints:
+
+| Method · path | Body / params | Returns |
+|---|---|---|
+| `GET  /health` | — | `{"status": "ok"}` |
+| `GET  /list-engines` | — | `{count, engines[]}` |
+| `POST /search` | `{query, engine?, limit?, depth?, profile?}` | array of results |
+| `POST /search-many` | `{query, engines[], limit?, timeout?}` | per-engine + merged feed |
+| `POST /extract` | `{url, paginate?, max_scrolls?, links?, images?, profile?}` | extracted markdown |
+
+```bash
+# Quick examples
+curl localhost:8088/health
+curl -X POST -H 'Content-Type: application/json' \
+     -d '{"query":"transformer","engine":"arxiv","limit":3}' \
+     localhost:8088/search
+```
+
+> **Why single-threaded?** CloakBrowser uses Playwright's *sync* API, which binds each browser to its launching thread. A multi-threaded server would cross-thread the Browser. The self-hosted single-user use case doesn't need concurrency anyway. Concurrent agents → run multiple instances on different ports.
+>
+> **Network safety**: the server refuses to bind `0.0.0.0` without a bearer token to prevent accidental network exposure.
+
+---
+
+## 🧪 Quality monitoring — nightly canary
+
+Every adapter depends on the live DOM of its target site. Sites change every day, so we built `tests/nightly_canary.py` to detect regressions automatically:
+
+- Runs one canary search through every adapter in parallel
+- Classifies each as **PASS** (≥1 result), **EMPTY** (clean run, no hits), or **FAIL** (exception)
+- Writes `canary_report.json` for downstream tooling
+- Exits non-zero when more than 20% of engines are unhealthy
+
+The companion GitHub Action (`.github/workflows/nightly-canary.yml`) runs this **every day at 06:00 UTC** and **auto-files a GitHub issue** (label: `canary-regression`) when the threshold trips. If an issue already exists, it appends a comment instead of creating duplicates.
+
+Run locally:
+
+```bash
+# Full sweep (~5 min, 80 engines, parallel=4)
+python tests/nightly_canary.py
+
+# Targeted subset
+python tests/nightly_canary.py --engines duckduckgo,reddit,arxiv
+
+# Tighten/loosen the regression threshold
+python tests/nightly_canary.py --fail-threshold 0.10
+```
+
+Trigger manually on GitHub: **repo → Actions → nightly-canary → Run workflow**.
 
 ---
 
@@ -412,6 +502,80 @@ agentsearch search "科技"     --engine weibo
 ```bash
 agentsearch search "llama" --engine huggingface --json
 # Returns model_id, author, downloads, likes, pipeline_tag, library, tags
+```
+</details>
+
+<details>
+<summary><b>⚡ Multi-engine fan-out (parallel + URL-deduped)</b></summary>
+
+```bash
+# Run 3-5 engines concurrently. Wall-clock ≈ slowest engine, not sum.
+# URLs surfaced by multiple engines float to the top of the merged feed.
+agentsearch search-many "open source MCP web search" \
+    --engines duckduckgo,hackernews,github --limit 5 --merged --json
+
+# Or use a preset bundle (built-in shortcuts):
+agentsearch jobs    "data engineer"             # linkedin_jobs+indeed+ziprecruiter+glassdoor
+agentsearch travel  "kyoto"                     # booking + expedia
+agentsearch news    "fed rate decision"         # reuters+ap+bbc+guardian+npr
+agentsearch code    "kubernetes ingress yaml"   # github+stackoverflow+HN
+agentsearch research "diffusion transformer"    # ddg+google+reddit+HN
+```
+</details>
+
+<details>
+<summary><b>📰 One-shot SERP + body (--depth N)</b></summary>
+
+```bash
+# Top N results come back with body_markdown / body_word_count already
+# attached — no follow-up extract calls needed.
+agentsearch search "Brave Search API forbids AI" \
+    --engine hackernews --limit 5 --depth 3 --json
+```
+</details>
+
+<details>
+<summary><b>🚦 Health-aware fallback (--fallback)</b></summary>
+
+```bash
+# Try the chosen engine; if it returns empty / errors, walk down a
+# chain ranked by recent success rate. Engine health is recorded in
+# ~/.cache/agentsearch/health.json across calls.
+agentsearch search "X" --engine google --fallback --json
+
+# Custom chain:
+agentsearch search "X" --engine google \
+    --fallback --fallback-chain duckduckgo,bing,startpage --json
+
+# Inspect the local health table (sorted by composite score):
+agentsearch status
+```
+</details>
+
+<details>
+<summary><b>💼 Compare jobs across LinkedIn / Indeed / ZipRecruiter / Glassdoor</b></summary>
+
+```bash
+agentsearch jobs "site reliability engineer in Berlin" --limit 5 --json | jq .
+# Top of the merged feed = consensus picks (URL surfaced by multiple boards)
+```
+</details>
+
+<details>
+<summary><b>🗺️ Local business search via Google Maps</b></summary>
+
+```bash
+agentsearch search "ramen tokyo" --engine google_maps --limit 5 --json
+# Returns name, url, rating, review_count, address, category, phone, website
+```
+</details>
+
+<details>
+<summary><b>📈 Quick ticker lookup via Yahoo Finance</b></summary>
+
+```bash
+agentsearch search "apple" --engine yahoo_finance --limit 3 --json
+# Returns symbol, name, last_price, exchange, asset_type
 ```
 </details>
 
