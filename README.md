@@ -6,11 +6,11 @@
 
 # **Free. Local. Private. Bypasses Cloudflare.**
 
-**One Python package. 61 websites. Zero API keys. Zero data leakage.**
+**One Python package. 71 websites. Zero API keys. Zero data leakage.**
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Python 3.9+](https://img.shields.io/badge/Python-3.9+-blue.svg)](https://www.python.org/)
-[![Sites: 61](https://img.shields.io/badge/Sites-61-success.svg)]()
+[![Sites: 71](https://img.shields.io/badge/Sites-71-success.svg)]()
 [![No API Key](https://img.shields.io/badge/No%20API%20Key-Required-success.svg)]()
 [![Local Only](https://img.shields.io/badge/Data-Stays%20on%20Your%20Machine-orange.svg)]()
 [![Bypasses Cloudflare](https://img.shields.io/badge/Bypasses-Cloudflare%20%2F%20PerimeterX%20%2F%20Akamai-red.svg)]()
@@ -35,7 +35,7 @@ python -m cloak_stealth_suite.cli search "best laptop 2025"         --engine red
 python -m cloak_stealth_suite.cli search "transformer attention"    --engine arxiv
 ```
 
-61 sites. One CLI. Runs entirely on your machine. **Bypasses Cloudflare, PerimeterX, Akamai, DataDome, and every fingerprint test we know of.**
+71 sites. One CLI. Runs entirely on your machine. **Bypasses Cloudflare, PerimeterX, Akamai, DataDome, and every fingerprint test we know of.**
 
 ---
 
@@ -74,7 +74,7 @@ python -m cloak_stealth_suite.cli search "transformer attention"    --engine arx
 | 🌐 Data leaves your machine              | **Never** | Always | Never | Depends on instance |
 | 🛡️ **Bypasses Cloudflare**               | ✅ **C++ patches** | N/A (uses APIs) | ❌ Detected instantly | ❌ HTTP-only |
 | 🔬 **Bypasses fingerprint tests**         | ✅ All major | N/A | ❌ Fails CreepJS | ❌ |
-| 🌍 Sites supported                       | **61 sites** | 1 (Google) | Anything you code | Aggregates ~10 SEs |
+| 🌍 Sites supported                       | **71 sites** | 1 (Google) | Anything you code | Aggregates ~10 SEs |
 | 🐍 JS rendering                          | ✅ Full Chromium | ❌ API-only | ✅ Yes | ❌ HTTP only |
 | 🔐 Login-walled sites                    | ✅ Cookie import | ❌ | Limited | ❌ |
 | 🚀 Setup                                 | `pip install` | Sign up + API key | Code from scratch | Docker + config |
@@ -82,7 +82,7 @@ python -m cloak_stealth_suite.cli search "transformer attention"    --engine arx
 
 ---
 
-## 🌍 The 61 Sites — Categorized
+## 🌍 The 71 Sites — Categorized
 
 > Every site is implemented as a self-contained adapter (`cloak_stealth_suite/engines/<name>.py`) with a runnable test (`tests/test_<name>.py`).
 
@@ -107,6 +107,9 @@ Reddit · Reddit Subreddit (JSON) · Twitter/X · Quora · BlackHatWorld · Inst
 
 **🇨🇳 Chinese Platforms (6)**
 Zhihu · Weibo · Xiaohongshu · Douyin · Toutiao · Bilibili
+
+**🌍 Western News (10)**
+BBC · The Guardian · Reuters · AP News · CNN · NPR · Al Jazeera · TechCrunch · The Verge · Ars Technica
 
 **🎬 Video & Streaming (4)**
 YouTube · Twitch · Netflix · TikTok
@@ -210,7 +213,7 @@ finally:
 cp -r skills/agent-search ~/.openclaw/workspace/skills/
 ```
 
-Now your OpenClaw / Codex / Kiro agent natively knows how to search 61 sites — no plumbing, no prompts.
+Now your OpenClaw / Codex / Kiro agent natively knows how to search 71 sites — no plumbing, no prompts.
 
 ---
 

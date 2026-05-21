@@ -6,11 +6,11 @@
 
 # **免费 · 本地 · 隐私 · 绕过 Cloudflare**
 
-**一个 Python 包。61 个网站。零 API Key。零数据外泄。**
+**一个 Python 包。71 个网站。零 API Key。零数据外泄。**
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Python 3.9+](https://img.shields.io/badge/Python-3.9+-blue.svg)](https://www.python.org/)
-[![Sites: 61](https://img.shields.io/badge/网站数-61-success.svg)]()
+[![Sites: 71](https://img.shields.io/badge/网站数-71-success.svg)]()
 [![No API Key](https://img.shields.io/badge/无需-API%20Key-success.svg)]()
 [![Local Only](https://img.shields.io/badge/数据-永远在本机-orange.svg)]()
 [![Bypasses Cloudflare](https://img.shields.io/badge/绕过-Cloudflare%20%2F%20PerimeterX%20%2F%20Akamai-red.svg)]()
@@ -35,7 +35,7 @@ python -m cloak_stealth_suite.cli search "推荐笔记本 2025"  --engine reddit
 python -m cloak_stealth_suite.cli search "transformer 注意力" --engine arxiv
 ```
 
-61 个站点。一个 CLI。**完全跑在你的机器上。绕过 Cloudflare、PerimeterX、Akamai、DataDome 以及所有已知的指纹检测系统。**
+71 个站点。一个 CLI。**完全跑在你的机器上。绕过 Cloudflare、PerimeterX、Akamai、DataDome 以及所有已知的指纹检测系统。**
 
 ---
 
@@ -74,7 +74,7 @@ python -m cloak_stealth_suite.cli search "transformer 注意力" --engine arxiv
 | 🌐 数据是否离开本机                       | **永远不会** | 每次请求都发到云 | 不会 | 取决于实例 |
 | 🛡️ **能绕过 Cloudflare**                  | ✅ **C++ 级补丁** | 不适用（API 调用） | ❌ 秒被识别 | ❌ 仅 HTTP |
 | 🔬 **能通过指纹检测**                       | ✅ 全部主流 | 不适用 | ❌ CreepJS 直接挂 | ❌ |
-| 🌍 支持网站数                             | **61 个** | 1 个（Google） | 你自己写 | 聚合大概 10 个 SE |
+| 🌍 支持网站数                             | **71 个** | 1 个（Google） | 你自己写 | 聚合大概 10 个 SE |
 | 🐍 JavaScript 渲染                        | ✅ 完整 Chromium | ❌ 仅 API | ✅ | ❌ 仅 HTTP |
 | 🔐 需登录的网站                           | ✅ Cookie 导入 | ❌ | 有限 | ❌ |
 | 🚀 部署                                   | `pip install` | 注册 + 申请 key | 从零写代码 | Docker + 配置 |
@@ -82,7 +82,7 @@ python -m cloak_stealth_suite.cli search "transformer 注意力" --engine arxiv
 
 ---
 
-## 🌍 全部 61 个站点 — 按类目
+## 🌍 全部 71 个站点 — 按类目
 
 > 每个站点都是一个独立的适配器（`cloak_stealth_suite/engines/<name>.py`），并附带可独立运行的测试（`tests/test_<name>.py`）。
 
@@ -107,6 +107,9 @@ Reddit · Reddit Subreddit (JSON) · Twitter/X · Quora · BlackHatWorld · Inst
 
 **🇨🇳 中文平台 (6)**
 知乎 · 微博 · 小红书 · 抖音 · 今日头条 · B站
+
+**🌍 海外新闻 (10)**
+BBC · 卫报 · 路透社 · 美联社 · CNN · NPR · 半岛电视台 · TechCrunch · The Verge · Ars Technica
 
 **🎬 视频 & 直播 (4)**
 YouTube · Twitch · Netflix · TikTok
@@ -210,7 +213,7 @@ finally:
 cp -r skills/agent-search ~/.openclaw/workspace/skills/
 ```
 
-完成后你的 OpenClaw / Codex / Kiro Agent 就**原生知道**怎么搜 61 个站点了 — 不用写胶水代码、不用调 prompt。
+完成后你的 OpenClaw / Codex / Kiro Agent 就**原生知道**怎么搜 71 个站点了 — 不用写胶水代码、不用调 prompt。
 
 ---
 

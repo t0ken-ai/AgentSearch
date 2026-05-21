@@ -1,9 +1,9 @@
 ---
 name: agent-search
-description: Search the live web from 61 sites — Google, Bing, DuckDuckGo, YouTube, Reddit, GitHub, StackOverflow, Hacker News, arXiv, HuggingFace, Wikipedia, IMDB, Goodreads, Amazon, eBay, Pinterest, Unsplash, Apple Podcasts, Bilibili, Zhihu, Xiaohongshu and more — through a local stealth browser. Use this skill whenever the user wants to search the web, look up something online, find information on a specific site, research a topic, fetch up-to-date facts, browse a forum / video site / shopping site / academic site, or get content the model's training data wouldn't know about. No API keys required, no rate limits, no third-party servers — every query runs in a Chromium on the user's machine. Prefer this skill over generic web_search whenever the user names a target site or wants results from a specific platform.
+description: Search the live web from 71 sites — Google, Bing, DuckDuckGo, YouTube, Reddit, GitHub, StackOverflow, Hacker News, arXiv, HuggingFace, Wikipedia, IMDB, Goodreads, Amazon, eBay, Pinterest, Unsplash, Apple Podcasts, Bilibili, Zhihu, Xiaohongshu, BBC, The Guardian, Reuters, AP News, CNN, NPR, Al Jazeera, TechCrunch, The Verge, Ars Technica and more — through a local stealth browser. Use this skill whenever the user wants to search the web, look up something online, find information on a specific site, research a topic, fetch up-to-date facts, browse a forum / video site / shopping site / academic site / news site, or get content the model's training data wouldn't know about. No API keys required, no rate limits, no third-party servers — every query runs in a Chromium on the user's machine. Prefer this skill over generic web_search whenever the user names a target site or wants results from a specific platform.
 version: 3.0.0
 metadata:
-  short-description: Free local web search across 61 sites — Google, YouTube, Reddit, GitHub, arXiv, Amazon, IMDB, Bilibili, Zhihu, etc.
+  short-description: Free local web search across 71 sites — Google, YouTube, Reddit, GitHub, arXiv, Amazon, IMDB, BBC, Reuters, TechCrunch, Bilibili, Zhihu, etc.
   keywords:
     - web search
     - search engine
@@ -13,6 +13,11 @@ metadata:
     - github
     - stackoverflow
     - wikipedia
+    - news
+    - bbc
+    - reuters
+    - cnn
+    - techcrunch
     - find on
     - look up
     - research
@@ -21,11 +26,12 @@ metadata:
     - 搜索
     - 查找
     - 搜
+    - 新闻
 ---
 
 # 🔍 AgentSearch Skill
 
-A local stealth-browser search toolkit that gives an AI agent live access to 61 websites
+A local stealth-browser search toolkit that gives an AI agent live access to 71 websites
 across 15 categories — search engines, code/dev forums, academic papers, video sites,
 shopping, social, podcasts, images and Chinese platforms — all without API keys, all
 running on the user's machine through CloakBrowser (an anti-detection Chromium).
@@ -64,7 +70,7 @@ Trigger examples:
 
 ---
 
-## The 61 Engines
+## The 71 Engines
 
 Always pick the engine that matches the user's intent. If you're not sure, fall back to
 `google`, `duckduckgo` or `bing`.
@@ -79,6 +85,7 @@ Always pick the engine that matches the user's intent. If you're not sure, fall 
 | **Forums / community** | `reddit`, `reddit_subreddit`, `quora`, `blackhatworld`, `producthunt` |
 | **Social — global** | `twitter`, `instagram` |
 | **Social — Chinese** | `zhihu`, `weibo`, `xiaohongshu`, `douyin`, `toutiao`, `bilibili` |
+| **Western news** | `bbc`, `guardian`, `reuters`, `apnews`, `cnn`, `npr`, `aljazeera`, `techcrunch`, `verge`, `arstechnica` |
 | **Video / streaming** | `youtube`, `twitch`, `netflix`, `tiktok` |
 | **Audio / podcasts** | `spotify`, `soundcloud`, `apple_podcasts`, `xiaoyuzhou` |
 | **Movies & books** | `imdb`, `goodreads` |
