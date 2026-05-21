@@ -1,18 +1,24 @@
-"""Nightly canary — run a small smoke search through every engine.
+"""Engine canary — run a small smoke search through every adapter.
 
-Each engine is treated as PASS / DEGRADED / FAIL based on whether it
+Each engine is treated as PASS / EMPTY / FAIL based on whether it
 returns >= MIN_RESULTS hits within TIMEOUT seconds for a single canary
-query. Output is a JSON report at ``canary_report.json`` and a
-human-readable summary on stdout. CI consumes the JSON to fail the
-build only when the *aggregate* health drops (one flaky engine is
-expected; ten is a regression).
+query. Output is a JSON report and (optionally) a markdown issue body
+plus an automatically-filed GitHub issue.
 
-Run locally::
+Designed to run **on the user's own machine on a residential IP**, not
+on shared CI runners. GitHub Actions runners use Azure datacenter IPs
+that are pre-blocked / rate-throttled by Reddit, Cloudflare, and most
+anti-bot vendors, which would produce false-positive failures.
 
-    python tests/nightly_canary.py
-    python tests/nightly_canary.py --engines duckduckgo,reddit,arxiv
+CLI entry points::
 
-Run in CI: see .github/workflows/nightly-canary.yml.
+    agentsearch canary
+    agentsearch canary --engines duckduckgo,reddit,arxiv
+    agentsearch canary --gh-issue                   # auto file via `gh`
+    agentsearch canary --issue-md /tmp/issue.md     # write markdown only
+
+Schedule it via launchd (macOS), systemd-timer (Linux), or cron.
+See docs/CANARY.md for ready-made templates.
 """
 
 from __future__ import annotations
@@ -21,16 +27,15 @@ import argparse
 import json
 import logging
 import os
+import shutil
+import subprocess
 import sys
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
-# Make the parent project importable when run directly from tests/.
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-
-from agent_search.cli import _engine_registry, _get_engine
-from agent_search.core import BrowserConfig, launch, new_page
+from .cli import _engine_registry, _get_engine
+from .core import BrowserConfig, launch, new_page
 
 log = logging.getLogger(__name__)
 
@@ -174,6 +179,114 @@ DEFAULT_MIN_RESULTS = 1
 DEFAULT_PARALLEL = 4
 
 
+def _build_issue_markdown(summary: dict) -> tuple[str, str]:
+    """Format ``(title, body)`` for a GitHub issue describing the regression.
+
+    The body lists every non-PASS engine plus a short remediation hint.
+    Title is short enough to fit GitHub's UI without truncation.
+    """
+    bad = [r for r in summary["engines"] if r["status"] != "PASS"]
+    bad.sort(key=lambda r: (r["status"], r["engine"]))
+    title = (
+        f"🚨 Canary regression: {summary['failed'] + summary['empty']}/"
+        f"{summary['total']} engines unhealthy "
+        f"(pass rate {summary['pass_rate'] * 100:.1f}%)"
+    )
+    lines = [
+        f"**Pass rate:** {summary['pass_rate'] * 100:.1f}% "
+        f"({summary['passed']} PASS · {summary['empty']} EMPTY · {summary['failed']} FAIL)",
+        f"**Wall-clock:** {summary['elapsed_s']}s",
+        f"**Host:** {os.uname().sysname} {os.uname().nodename}",
+        "",
+        "## Unhealthy engines",
+        "",
+    ]
+    for r in bad:
+        line = (
+            f"- **{r['engine']}** — `{r['status']}` "
+            f"({r['results']} hits, {r['elapsed_s']}s, query: `{r['query']}`)"
+        )
+        if r.get("error"):
+            line += f"\n   error: `{r['error']}`"
+        lines.append(line)
+
+    lines += [
+        "",
+        "## How to reproduce locally",
+        "",
+        "```bash",
+        f"agentsearch canary --engines {','.join(r['engine'] for r in bad)}",
+        "```",
+        "",
+        "Or for a single engine with full logs:",
+        "",
+        "```bash",
+        f"agentsearch search '<query>' --engine {bad[0]['engine'] if bad else '<name>'} --limit 3 --json",
+        "```",
+        "",
+        "## Likely causes",
+        "",
+        "1. The site changed its DOM and our selectors stopped matching → fix the engine adapter.",
+        "2. Site is rate-limiting / temporarily blocking the IP → re-run later, possibly with a different network.",
+        "3. CloakBrowser update changed fingerprint behavior → check `pip show cloakbrowser` and the engine's stealth args.",
+        "",
+        "_Filed automatically by `agentsearch canary --gh-issue` — see `docs/CANARY.md`._",
+    ]
+    return title, "\n".join(lines)
+
+
+def _file_gh_issue(title: str, body: str, label: str = "canary-regression") -> bool:
+    """Use the local `gh` CLI to file (or comment on) a GitHub issue.
+
+    Looks for an existing open issue with the same label first; if found,
+    appends the new body as a comment instead of creating a duplicate.
+    Returns True on success, False otherwise.
+    """
+    if not shutil.which("gh"):
+        log.warning("[canary] `gh` CLI not found — install + run `gh auth login`, or use --issue-md instead")
+        return False
+
+    # Look for an existing open issue.
+    try:
+        existing = subprocess.run(
+            ["gh", "issue", "list", "--label", label, "--state", "open", "--json", "number,title", "--limit", "5"],
+            capture_output=True,
+            text=True,
+            timeout=20,
+        )
+        items = json.loads(existing.stdout or "[]") if existing.returncode == 0 else []
+    except Exception as e:
+        log.warning("[canary] gh issue list failed: %s", e)
+        items = []
+
+    try:
+        if items:
+            num = items[0]["number"]
+            log.info("[canary] commenting on existing issue #%s", num)
+            r = subprocess.run(
+                ["gh", "issue", "comment", str(num), "--body", body],
+                capture_output=True,
+                text=True,
+                timeout=30,
+            )
+        else:
+            log.info("[canary] creating new issue")
+            r = subprocess.run(
+                ["gh", "issue", "create", "--title", title, "--body", body, "--label", label],
+                capture_output=True,
+                text=True,
+                timeout=30,
+            )
+        if r.returncode != 0:
+            log.warning("[canary] gh exited %s: %s", r.returncode, r.stderr.strip())
+            return False
+        log.info("[canary] gh: %s", (r.stdout or "").strip())
+        return True
+    except Exception as e:
+        log.warning("[canary] gh issue create/comment failed: %s", e)
+        return False
+
+
 def run_one_engine(engine_name: str, query: str, limit: int, timeout_s: int) -> dict:
     started = time.time()
     try:
@@ -222,14 +335,19 @@ def run_one_engine(engine_name: str, query: str, limit: int, timeout_s: int) -> 
 
 
 def main():
-    ap = argparse.ArgumentParser()
+    ap = argparse.ArgumentParser(prog="agentsearch canary",
+                                 description="Run a smoke search through every engine, report regressions")
     ap.add_argument("--engines", default=None, help="Comma-separated subset (default: all unique)")
     ap.add_argument("--timeout", type=int, default=DEFAULT_TIMEOUT_S)
     ap.add_argument("--limit", type=int, default=DEFAULT_LIMIT)
     ap.add_argument("--parallel", type=int, default=DEFAULT_PARALLEL)
-    ap.add_argument("--report", default="canary_report.json")
+    ap.add_argument("--report", default="canary_report.json", help="JSON report path")
     ap.add_argument("--fail-threshold", type=float, default=0.20,
-                    help="Exit non-zero when (FAIL+EMPTY)/total exceeds this fraction (default 0.20)")
+                    help="Exit non-zero (and trigger --gh-issue) when (FAIL+EMPTY)/total exceeds this fraction (default 0.20)")
+    ap.add_argument("--issue-md", default=None,
+                    help="When the regression threshold trips, also write a markdown issue body to this path")
+    ap.add_argument("--gh-issue", action="store_true",
+                    help="When the regression threshold trips, file (or comment on) a GitHub issue via the `gh` CLI. Requires `gh auth login`.")
     args = ap.parse_args()
 
     logging.basicConfig(level=logging.WARNING, format="%(levelname)s: %(message)s")
@@ -298,7 +416,24 @@ def main():
     print(f"📄 Report: {args.report}")
 
     bad_fraction = (empty + failed) / max(total, 1)
-    if bad_fraction > args.fail_threshold:
+    regressed = bad_fraction > args.fail_threshold
+
+    if regressed and (args.issue_md or args.gh_issue):
+        title, body = _build_issue_markdown(summary)
+        if args.issue_md:
+            Path(args.issue_md).write_text(body)
+            print(f"📝 Issue markdown: {args.issue_md}")
+        if args.gh_issue:
+            if _file_gh_issue(title, body):
+                print("📨 Filed GitHub issue (or commented on existing one).")
+            else:
+                print(
+                    "⚠️  --gh-issue failed (gh CLI missing or unauthenticated). "
+                    "Try: gh auth login, or fall back to --issue-md.",
+                    file=sys.stderr,
+                )
+
+    if regressed:
         print(f"💥 {bad_fraction:.0%} engines unhealthy — exceeds {args.fail_threshold:.0%} threshold")
         return 1
     return 0

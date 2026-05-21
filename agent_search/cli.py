@@ -579,6 +579,15 @@ def cmd_status(args):
 def main():
     logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
 
+    # Special-case `canary`: it has its own argparse parser inside
+    # `agent_search.canary` with a long flag list (--engines, --gh-issue,
+    # --report, --issue-md, --fail-threshold). Nested REMAINDER handling
+    # in argparse is fragile, so we just hand off the argv tail directly.
+    if len(sys.argv) >= 2 and sys.argv[1] == "canary":
+        from .canary import main as canary_main
+        sys.argv = [sys.argv[0]] + sys.argv[2:]
+        sys.exit(canary_main())
+
     parser = argparse.ArgumentParser(prog="agentsearch", description="AgentSearch — local stealth-browser web search across 71+ sites for AI agents")
     sub = parser.add_subparsers(dest="command")
 
@@ -706,6 +715,12 @@ def main():
         default=None,
         help="Override the login URL (default: a known login URL for common sites)",
     )
+
+    # canary — runs locally on the user's residential IP. See docs/CANARY.md.
+    # NOTE: Implemented as an early-dispatch before argparse runs (in main())
+    # because the canary takes its own flag set. Listed here only so it shows
+    # up in the global --help banner.
+    sub.add_parser("canary", help="Health check across all engines (local; auto-files GitHub issues — see docs/CANARY.md)")
 
     # bundle subcommands (jobs / research / news / code)
     for bundle_name, engines in _BUNDLES.items():

@@ -360,31 +360,40 @@ curl -X POST -H 'Content-Type: application/json' \
 
 ---
 
-## 🧪 Quality monitoring — nightly canary
+## 🧪 Quality monitoring — local canary
 
-Every adapter depends on the live DOM of its target site. Sites change every day, so we built `tests/nightly_canary.py` to detect regressions automatically:
+Every adapter depends on the live DOM of its target site. Sites change every day, so we built `agentsearch canary` to detect regressions automatically.
+
+**Run it locally, not on CI.** GitHub Actions runners use Azure datacenter IPs that Reddit / Cloudflare / DataDome already pre-block, so a CI canary produces noise, not signal. The recommended pattern is a daily launchd / systemd-timer / cron job on the user's own machine that calls:
+
+```bash
+agentsearch canary --gh-issue
+```
+
+The canary:
 
 - Runs one canary search through every adapter in parallel
-- Classifies each as **PASS** (≥1 result), **EMPTY** (clean run, no hits), or **FAIL** (exception)
+- Classifies each as **PASS** (≥1 hit), **EMPTY** (clean run, 0 hits = likely DOM drift), or **FAIL** (exception)
 - Writes `canary_report.json` for downstream tooling
-- Exits non-zero when more than 20% of engines are unhealthy
-
-The companion GitHub Action (`.github/workflows/nightly-canary.yml`) runs this **every day at 06:00 UTC** and **auto-files a GitHub issue** (label: `canary-regression`) when the threshold trips. If an issue already exists, it appends a comment instead of creating duplicates.
-
-Run locally:
+- When `(EMPTY + FAIL) / total > 20%`, opens (or comments on) a GitHub issue tagged `canary-regression` via the `gh` CLI
 
 ```bash
 # Full sweep (~5 min, 80 engines, parallel=4)
-python tests/nightly_canary.py
+agentsearch canary
 
 # Targeted subset
-python tests/nightly_canary.py --engines duckduckgo,reddit,arxiv
+agentsearch canary --engines duckduckgo,reddit,arxiv
 
-# Tighten/loosen the regression threshold
-python tests/nightly_canary.py --fail-threshold 0.10
+# File a GitHub issue automatically when threshold trips
+agentsearch canary --gh-issue
+
+# No `gh` CLI? Generate a markdown body to paste manually:
+agentsearch canary --issue-md /tmp/canary-issue.md
 ```
 
-Trigger manually on GitHub: **repo → Actions → nightly-canary → Run workflow**.
+See [`docs/CANARY.md`](docs/CANARY.md) for ready-made `launchd` / `systemd` / `cron` templates and the [`skills/agentsearch-canary/`](skills/agentsearch-canary/) OpenClaw skill that does the daily run for you.
+
+> The repo also keeps a manual-dispatch workflow (`.github/workflows/canary-on-demand.yml`) as a "click button to double-check" fallback. It's not on a schedule — that's deliberate.
 
 ---
 

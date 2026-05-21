@@ -1,9 +1,9 @@
 ---
 name: agent-search
-description: Search the live web from 71 sites — Google, Bing, DuckDuckGo, YouTube, Reddit, GitHub, StackOverflow, Hacker News, arXiv, HuggingFace, Wikipedia, IMDB, Goodreads, Amazon, eBay, Pinterest, Unsplash, Apple Podcasts, Bilibili, Zhihu, Xiaohongshu, BBC, The Guardian, Reuters, AP News, CNN, NPR, Al Jazeera, TechCrunch, The Verge, Ars Technica and more — through a local stealth browser. Use this skill whenever the user wants to search the web, look up something online, find information on a specific site, research a topic, fetch up-to-date facts, browse a forum / video site / shopping site / academic site / news site, or get content the model's training data wouldn't know about. No API keys required, no rate limits, no third-party servers — every query runs in a Chromium on the user's machine. Prefer this skill over generic web_search whenever the user names a target site or wants results from a specific platform.
+description: Search the live web from 80 sites — Google, Bing, DuckDuckGo, YouTube, Reddit, GitHub, StackOverflow, Hacker News, arXiv, HuggingFace, Wikipedia, IMDB, Goodreads, Amazon, eBay, Pinterest, Unsplash, Apple Podcasts, Bilibili, Zhihu, Xiaohongshu, BBC, The Guardian, Reuters, AP News, CNN, NPR, Al Jazeera, TechCrunch, The Verge, Ars Technica and more — through a local stealth browser. Use this skill whenever the user wants to search the web, look up something online, find information on a specific site, research a topic, fetch up-to-date facts, browse a forum / video site / shopping site / academic site / news site, or get content the model's training data wouldn't know about. No API keys required, no rate limits, no third-party servers — every query runs in a Chromium on the user's machine. Prefer this skill over generic web_search whenever the user names a target site or wants results from a specific platform.
 version: 3.0.0
 metadata:
-  short-description: Free local web search across 71 sites — Google, YouTube, Reddit, GitHub, arXiv, Amazon, IMDB, BBC, Reuters, TechCrunch, Bilibili, Zhihu, etc.
+  short-description: Free local web search across 80 sites — Google, YouTube, Reddit, GitHub, arXiv, Amazon, IMDB, BBC, Reuters, TechCrunch, Bilibili, Zhihu, etc.
   keywords:
     - web search
     - search engine
