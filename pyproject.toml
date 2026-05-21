@@ -9,7 +9,11 @@ description = "Anti-detection headless browser automation framework based on Clo
 requires-python = ">=3.12"
 dependencies = [
     "cloakbrowser",
+    "trafilatura>=2.0",
 ]
+
+[project.optional-dependencies]
+mcp = ["mcp>=1.0"]
 
 [project.scripts]
 cloak = "agent_search.cli:main"

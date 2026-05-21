@@ -7,6 +7,7 @@ import json
 import logging
 import pkgutil
 import sys
+import time
 from functools import lru_cache
 
 from .core import launch, new_page, BrowserConfig
@@ -88,13 +89,99 @@ def _get_engine(name: str):
 
 
 def cmd_search(args):
+    # When --fallback is set, run through the health-aware fallback chain:
+    # try the requested engine first, then bubble down to other healthy
+    # general-search engines if it returns nothing / errors.
+    if getattr(args, "fallback", False):
+        from .health import search_with_fallback, DEFAULT_CHAIN
+
+        chain = (
+            [e.strip() for e in args.fallback_chain.split(",") if e.strip()]
+            if getattr(args, "fallback_chain", None)
+            else list(DEFAULT_CHAIN)
+        )
+        out = search_with_fallback(
+            args.query,
+            primary=args.engine,
+            limit=args.limit,
+            chain=chain,
+            headless=not args.visible,
+        )
+        if args.json:
+            print(json.dumps(out, ensure_ascii=False, indent=2))
+            return 0 if out.get("results") else 1
+        if not out.get("results"):
+            attempted = ", ".join(a["engine"] for a in out["attempts"])
+            print(f"No results found (tried: {attempted}).", file=sys.stderr)
+            return 1
+        print(
+            f"engine={out['engine']} (fallback={out['fallback']}) attempts={len(out['attempts'])}\n",
+            file=sys.stderr,
+        )
+        for i, r in enumerate(out["results"], 1):
+            print(f"{i}. {r.get('title', '')}")
+            if r.get("url"):
+                print(f"   {r['url']}")
+            if r.get("snippet"):
+                print(f"   {r['snippet'][:200]}")
+            print()
+        return 0
+
+    # Standard single-engine path (also records to the health log so the
+    # fallback path has signal to work with on later calls).
+    from .health import HealthLog
+
+    health = HealthLog()
     cfg = BrowserConfig(headless=not args.visible, proxy=args.proxy)
     browser = launch(cfg)
+    started = time.time()
+    results = []
+    ok = False
     try:
         page = new_page(browser)
         engine_cls = _get_engine(args.engine)
         engine = engine_cls(page)
         results = engine.search(args.query, limit=args.limit)
+        ok = bool(results)
+
+        # Optional deep-fetch: pull the markdown body for the top N URLs
+        # so the agent doesn't need a follow-up `extract` round-trip.
+        depth = getattr(args, "depth", 0) or 0
+        if results and depth > 0:
+            from .extract import extract_page
+
+            top = [r for r in results[:depth] if r.url]
+            for r in top:
+                ep = None
+                try:
+                    ep = new_page(browser)
+                    rec = extract_page(
+                        ep,
+                        url=r.url,
+                        paginate=True,
+                        max_scrolls=2,
+                        include_links=False,
+                        include_images=False,
+                    )
+                    # Stamp the body fields onto the SearchResult's __dict__
+                    # so the JSON path picks them up.
+                    r.__dict__["body_markdown"] = rec.get("content_markdown") or ""
+                    r.__dict__["body_text"] = rec.get("content_text") or ""
+                    r.__dict__["body_word_count"] = rec.get("word_count") or 0
+                    if rec.get("date") and not getattr(r, "date", None):
+                        r.__dict__["date"] = rec["date"]
+                    if rec.get("author") and not getattr(r, "author", None):
+                        r.__dict__["author"] = rec["author"]
+                except Exception as e:
+                    logging.warning("[search] deep-fetch failed for %s: %s", r.url, e)
+                    r.__dict__["body_error"] = f"{type(e).__name__}: {e}"
+                finally:
+                    if ep is not None:
+                        try:
+                            ep.close()
+                        except Exception:
+                            pass
+
         if args.json:
             print(json.dumps([r.__dict__ for r in results], ensure_ascii=False, indent=2))
         else:
@@ -104,27 +191,79 @@ def cmd_search(args):
                     print(f"   {r.url}")
                 if r.snippet:
                     print(f"   {r.snippet[:200]}")
+                wc = r.__dict__.get("body_word_count")
+                if wc:
+                    print(f"   📰 body: {wc} words")
                 print()
         if not results:
             print("No results found.", file=sys.stderr)
             return 1
     finally:
+        try:
+            health.record(
+                args.engine,
+                ok=ok,
+                count=len(results) if results else 0,
+                ms=int((time.time() - started) * 1000),
+            )
+        except Exception:
+            pass
         browser.close()
     return 0
 
 
 def cmd_extract(args):
-    """Extract page content as text."""
+    """Extract main content from a URL with readability + auto-pagination."""
+    from .extract import extract_page
+
     cfg = BrowserConfig(headless=not args.visible)
     browser = launch(cfg)
     try:
         page = new_page(browser)
-        page.goto(args.url, timeout=30000, wait_until="domcontentloaded")
-        text = page.inner_text("body")
-        print(text)
+        result = extract_page(
+            page,
+            url=args.url,
+            paginate=not args.no_paginate,
+            max_scrolls=args.max_scrolls,
+            max_load_more_clicks=args.max_load_more,
+            include_links=not args.no_links,
+            include_images=not args.no_images,
+        )
     finally:
         browser.close()
-    return 0
+
+    if args.json:
+        # Drop heavy fields when the user asked for a leaner payload.
+        if args.no_links:
+            result.pop("links", None)
+        if args.no_images:
+            result.pop("images", None)
+        print(json.dumps(result, ensure_ascii=False, indent=2))
+        return 0 if result.get("status") == "ok" else 1
+
+    # Human-readable output.
+    fmt = args.format
+    if fmt == "markdown":
+        body = result.get("content_markdown") or result.get("content_text") or ""
+    else:
+        body = result.get("content_text") or result.get("content_markdown") or ""
+
+    if result.get("title"):
+        print(f"# {result['title']}")
+    meta_bits = []
+    if result.get("author"):
+        meta_bits.append(f"by {result['author']}")
+    if result.get("date"):
+        meta_bits.append(result["date"])
+    if result.get("word_count"):
+        meta_bits.append(f"{result['word_count']} words")
+    if meta_bits:
+        print(" · ".join(meta_bits))
+    if result.get("url"):
+        print(result["url"])
+    print()
+    print(body)
+    return 0 if result.get("status") == "ok" else 1
 
 
 def cmd_list_engines(args):
@@ -173,6 +312,105 @@ def cmd_test(args):
     return 0
 
 
+def cmd_search_many(args):
+    """Run multiple engines in parallel and merge their results."""
+    from .multi import search_many
+
+    engines = [e.strip() for e in args.engines.split(",") if e.strip()]
+    if not engines:
+        print("No engines provided. Use --engines google,reddit,arxiv (comma-separated).", file=sys.stderr)
+        return 2
+
+    out = search_many(
+        args.query,
+        engines,
+        limit=args.limit,
+        headless=not args.visible,
+        timeout_s=args.timeout,
+    )
+
+    if args.json:
+        print(json.dumps(out, ensure_ascii=False, indent=2))
+        return 0 if out["successful"] > 0 else 1
+
+    # Human-readable summary.
+    print(
+        f"query={args.query!r} engines={out['engines']} "
+        f"successful={out['successful']}/{len(out['engines'])} "
+        f"elapsed={out['elapsed_s']}s"
+    )
+    print()
+    if args.merged:
+        # Show only the merged list.
+        for i, r in enumerate(out["merged"][: args.limit * 2], 1):
+            tag = ",".join(r.get("engines") or [])
+            print(f"{i}. [{tag}] {r.get('title', '')}")
+            if r.get("url"):
+                print(f"   {r['url']}")
+            if r.get("snippet"):
+                print(f"   {r['snippet'][:200]}")
+            print()
+    else:
+        for engine_name, payload in out["per_engine"].items():
+            status = "✅" if payload.get("ok") and payload.get("count") else "❌"
+            err = f" — {payload.get('error', '')}" if not payload.get("ok") else ""
+            print(f"{status} {engine_name}  ({payload.get('count', 0)} hits, {payload.get('elapsed_s', '?')}s){err}")
+            for i, r in enumerate(payload.get("results", []), 1):
+                print(f"   {i}. {r.get('title', '')}")
+                if r.get("url"):
+                    print(f"      {r['url']}")
+            print()
+    return 0 if out["successful"] > 0 else 1
+
+
+def cmd_status(args):
+    """Show per-engine health from the local sliding-window log."""
+    from .health import HealthLog, DEFAULT_HEALTH_PATH
+
+    health = HealthLog()
+    rows = health.all_stats()
+
+    if args.json:
+        print(json.dumps({
+            "path": str(DEFAULT_HEALTH_PATH),
+            "engines": rows,
+        }, ensure_ascii=False, indent=2))
+        return 0
+
+    if not rows:
+        print(f"No health data yet. Run a few searches first.")
+        print(f"(Log path: {DEFAULT_HEALTH_PATH})")
+        return 0
+
+    # Sort by score descending so healthiest engines surface first.
+    rows.sort(key=lambda s: health.score(s["engine"]), reverse=True)
+
+    print(f"Health log: {DEFAULT_HEALTH_PATH}")
+    print()
+    print(f"{'engine':<22} {'score':>6} {'attempts':>8} {'success':>8} {'avg_hits':>8} {'avg_ms':>7}  last")
+    print("-" * 80)
+    for s in rows:
+        score = health.score(s["engine"])
+        sr = s["success_rate"]
+        sr_str = f"{sr*100:>6.1f}%" if sr is not None else "    —  "
+        avg_hits = f"{s['avg_results']:>6.2f}" if s["avg_results"] is not None else "    —"
+        avg_ms = f"{s['avg_ms']:>5}" if s["avg_ms"] is not None else "    —"
+        last_ok = "✅" if s["last_ok"] else "❌"
+        last_ago = ""
+        if s["last_attempt"]:
+            ago = int(time.time()) - int(s["last_attempt"])
+            if ago < 60:
+                last_ago = f"{ago}s ago"
+            elif ago < 3600:
+                last_ago = f"{ago // 60}m ago"
+            elif ago < 86400:
+                last_ago = f"{ago // 3600}h ago"
+            else:
+                last_ago = f"{ago // 86400}d ago"
+        print(f"{s['engine']:<22} {score:>6.2f} {s['attempts']:>8d} {sr_str:>8} {avg_hits:>8} {avg_ms:>7}ms  {last_ok} {last_ago}")
+    return 0
+
+
 def main():
     logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
 
@@ -187,19 +425,91 @@ def main():
     sp.add_argument("--json", action="store_true", help="Output as JSON")
     sp.add_argument("--visible", action="store_true", help="Run in headed mode")
     sp.add_argument("--proxy", default=None, help="Proxy URL")
+    sp.add_argument(
+        "--fallback",
+        action="store_true",
+        help="If the chosen engine fails, walk down a health-ranked fallback chain",
+    )
+    sp.add_argument(
+        "--fallback-chain",
+        default=None,
+        help="Comma-separated override of the default fallback chain "
+             "(default: duckduckgo,google,bing,brave,startpage,qwant,ecosia)",
+    )
+    sp.add_argument(
+        "--depth",
+        "-d",
+        type=int,
+        default=0,
+        help="Deep-fetch the top N results (extract markdown body inline). "
+             "0 = SERP only (default).",
+    )
 
     # extract
-    ep = sub.add_parser("extract", help="Extract page content")
+    ep = sub.add_parser("extract", help="Extract page content (readability + markdown)")
     ep.add_argument("url", help="URL to extract")
+    ep.add_argument("--json", action="store_true", help="Output as JSON")
+    ep.add_argument(
+        "--format",
+        "-f",
+        choices=["markdown", "text"],
+        default="markdown",
+        help="Output format for non-JSON mode (default: markdown)",
+    )
+    ep.add_argument(
+        "--no-paginate",
+        action="store_true",
+        help="Don't auto-scroll / click 'Load more' buttons",
+    )
+    ep.add_argument(
+        "--max-scrolls",
+        type=int,
+        default=3,
+        help="Max auto-scrolls for lazy content (default: 3)",
+    )
+    ep.add_argument(
+        "--max-load-more",
+        type=int,
+        default=3,
+        help="Max 'Load more' button clicks (default: 3)",
+    )
+    ep.add_argument("--no-links", action="store_true", help="Skip <a> link collection")
+    ep.add_argument("--no-images", action="store_true", help="Skip <img> collection")
     ep.add_argument("--visible", action="store_true")
 
     # list-engines
     lp = sub.add_parser("list-engines", help="List available engines")
 
+    # search-many
+    smp = sub.add_parser(
+        "search-many",
+        help="Run multiple engines in parallel and merge results",
+    )
+    smp.add_argument("query", help="Search query")
+    smp.add_argument(
+        "--engines",
+        "-e",
+        default="duckduckgo,google,reddit",
+        help="Comma-separated engine list (default: duckduckgo,google,reddit)",
+    )
+    smp.add_argument("--limit", "-n", type=int, default=5, help="Limit per engine")
+    smp.add_argument("--timeout", type=int, default=90, help="Total wall-clock timeout (s)")
+    smp.add_argument(
+        "--merged",
+        action="store_true",
+        help="Show only the URL-deduped merged list (text mode)",
+    )
+    smp.add_argument("--json", action="store_true", help="Output as JSON")
+    smp.add_argument("--visible", action="store_true")
+
     # test
     tp = sub.add_parser("test", help="Run anti-detection tests")
     tp.add_argument("sites", nargs="*", help="Sites to test")
     tp.add_argument("--visible", action="store_true")
+
+    # status
+    stp = sub.add_parser("status", help="Show engine health stats from the local log")
+    stp.add_argument("--json", action="store_true", help="Output as JSON")
 
     args = parser.parse_args()
     if not args.command:
@@ -208,10 +518,14 @@ def main():
 
     if args.command == "search":
         sys.exit(cmd_search(args))
+    elif args.command == "search-many":
+        sys.exit(cmd_search_many(args))
     elif args.command == "extract":
         sys.exit(cmd_extract(args))
     elif args.command == "list-engines":
         cmd_list_engines(args)
+    elif args.command == "status":
+        sys.exit(cmd_status(args))
     elif args.command == "test":
         sys.exit(cmd_test(args))
 
