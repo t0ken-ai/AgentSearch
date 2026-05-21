@@ -165,14 +165,102 @@ python -m cloak_stealth_suite.cli search "mountain landscape" --engine unsplash 
 python -m cloak_stealth_suite.cli search "interior design" --engine pinterest --limit 5 --json
 ```
 
-### Recipe 10 — Extract one URL's content
+### Recipe 10 — Extract one URL's content (readability + Markdown)
 ```bash
+# Returns clean Markdown body + structured metadata (title, author, date,
+# language, description, word_count, links, images). Auto-scrolls and
+# clicks "Load more" buttons to surface lazy content.
 python -m cloak_stealth_suite.cli extract "https://example.com/article" --json
+python -m cloak_stealth_suite.cli extract "https://reddit.com/r/foo/comments/x" --json --no-images
+```
+
+JSON output schema:
+
+```json
+{
+  "url": "...", "status": "ok",
+  "title": "...", "author": "...", "date": "2025-05-09",
+  "description": "...", "language": "en",
+  "content_markdown": "...", "content_text": "...",
+  "word_count": 7936, "extractor": "trafilatura",
+  "scrolls": 1, "load_more_clicks": 0,
+  "links": [{"text": "...", "url": "..."}],
+  "images": [{"src": "...", "alt": "..."}]
+}
 ```
 
 ### Recipe 11 — List every available engine
 ```bash
 python -m cloak_stealth_suite.cli list-engines
+```
+
+### Recipe 12 — Multi-engine fan-out (parallel)
+```bash
+# Run 3-5 engines concurrently and merge results by URL with consensus
+# signal (URLs surfaced by multiple engines float to top). 2-3× faster
+# than sequential calls.
+python -m cloak_stealth_suite.cli search-many "open-source MCP web search" \
+    --engines duckduckgo,hackernews,github --limit 5 --merged --json
+```
+
+### Recipe 13 — Search with deep-fetch (one-shot SERP + body)
+```bash
+# Returns SERP hits AND the readability-extracted markdown body of the
+# top N results, so the agent doesn't need follow-up `extract` calls.
+python -m cloak_stealth_suite.cli search "transformer scaling laws" \
+    --engine arxiv --limit 5 --depth 3 --json
+# Top 3 results get body_markdown + body_word_count fields.
+```
+
+### Recipe 14 — Search with health-aware auto-fallback
+```bash
+# Try primary engine; on empty / error, walk down a health-ranked chain
+# of general-search engines. Engine health is tracked across calls in
+# ~/.cache/agentsearch/health.json.
+python -m cloak_stealth_suite.cli search "X" --engine google --fallback --json
+
+# Custom fallback chain
+python -m cloak_stealth_suite.cli search "X" --engine google \
+    --fallback --fallback-chain duckduckgo,bing,startpage --json
+
+# Inspect the local health table
+python -m cloak_stealth_suite.cli status
+```
+
+---
+
+## 🔌 MCP Server Mode
+
+AgentSearch ships an MCP server that wraps the same engines as `search` /
+`extract` / `list_engines` tools, so any MCP-compatible host (Claude
+Desktop, Cursor, Cline, Continue, Roo Code, OpenClaw…) can call them
+directly. Each tool call shares one Chromium that recycles every 25
+calls (env: `AGENTSEARCH_RECYCLE_AFTER`).
+
+```bash
+# Start the server (stdio JSON-RPC)
+python -m cloak_stealth_suite.mcp_server
+```
+
+Tool catalog:
+
+| Tool | Args | Returns |
+|---|---|---|
+| `search` | `query, engine, limit, depth` | `{engine, query, count, results[]}` — when `depth>0`, top-N hits include `body_markdown` / `body_word_count` |
+| `extract` | `url, paginate, max_scrolls, include_links, include_images` | `{url, status, title, author, date, content_markdown, word_count, ...}` |
+| `list_engines` | (none) | `{count, engines[], categories{}}` |
+
+Sample Claude Desktop config (`~/Library/Application Support/Claude/claude_desktop_config.json`):
+
+```json
+{
+  "mcpServers": {
+    "agent-search": {
+      "command": "/path/to/venv/bin/python",
+      "args": ["-m", "cloak_stealth_suite.mcp_server"]
+    }
+  }
+}
 ```
 
 ---
@@ -240,24 +328,38 @@ Engine-specific results include extra fields on each item (use them when relevan
 ## Common Patterns
 
 ### Multi-engine fan-out for breadth
-When the user asks something open-ended ("research X for me"), call 2-3 complementary
-engines and merge:
+When the user asks something open-ended ("research X for me"), use the
+built-in `search-many` subcommand instead of calling N engines manually
+— it parallelises the launches and merges results by URL with a
+consensus signal:
 
 ```bash
-python -m cloak_stealth_suite.cli search "X" --engine google     --limit 5 --json
-python -m cloak_stealth_suite.cli search "X" --engine reddit     --limit 5 --json
-python -m cloak_stealth_suite.cli search "X" --engine arxiv      --limit 3 --json
+python -m cloak_stealth_suite.cli search-many "X" \
+    --engines google,reddit,arxiv,hackernews --limit 5 --merged --json
 ```
+
+This is roughly 2-3× faster than calling `search` once per engine and
+returns one URL-deduped feed.
 
 ### Fallback chain for resilience
-If engine N times out or returns 0 results, retry on engine N+1:
+Use the built-in `--fallback` flag instead of writing retry loops:
 
-```
-google → duckduckgo → bing → brave
+```bash
+python -m cloak_stealth_suite.cli search "X" --engine google --fallback --json
 ```
 
-The DuckDuckGo HTML fallback (`html.duckduckgo.com/html`) is the most rate-limit-free
-option.
+The fallback chain (default: `duckduckgo,google,bing,brave,startpage,
+qwant,ecosia`) is reordered by recent health on every call, so a
+flaky engine bubbles down automatically. Inspect with `cloak status`.
+
+### One-shot SERP + body
+For "research and read" turns, use `--depth N` so the top N result
+URLs come back with `body_markdown` already attached. Saves a
+follow-up `extract` round-trip per top hit:
+
+```bash
+python -m cloak_stealth_suite.cli search "X" --engine reddit --limit 5 --depth 3 --json
+```
 
 ### Refining a query for a target site
 For Chinese and walled platforms (`xiaohongshu`, `douyin`, `weibo`, `toutiao`, `xiaoyuzhou`)

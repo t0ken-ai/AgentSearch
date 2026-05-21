@@ -29,13 +29,20 @@
 ```bash
 pip install cloakbrowser && pip install -e .
 
+# Search 71 sites
 python -m cloak_stealth_suite.cli search "what's new in transformers" --engine google --json
 python -m cloak_stealth_suite.cli search "react hooks tutorial"     --engine youtube --limit 10
 python -m cloak_stealth_suite.cli search "best laptop 2025"         --engine reddit
 python -m cloak_stealth_suite.cli search "transformer attention"    --engine arxiv
+
+# Extract a URL as clean Markdown (readability + auto-scroll for lazy content)
+python -m cloak_stealth_suite.cli extract "https://news.ycombinator.com/item?id=43936992" --json
+
+# Or run as an MCP server for Cursor / Cline / Claude Desktop / OpenClaw / Continue
+python -m cloak_stealth_suite.mcp_server
 ```
 
-71 sites. One CLI. Runs entirely on your machine. **Bypasses Cloudflare, PerimeterX, Akamai, DataDome, and every fingerprint test we know of.**
+71 sites. One CLI. One MCP server. Runs entirely on your machine. **Bypasses Cloudflare, PerimeterX, Akamai, DataDome, and every fingerprint test we know of.**
 
 ---
 
@@ -67,18 +74,22 @@ python -m cloak_stealth_suite.cli search "transformer attention"    --engine arx
 
 ## 💡 Why AgentSearch (vs the alternatives)
 
-|                                          | AgentSearch | API services<br>(Tavily / Serper / Firecrawl) | Stock browser automation<br>(Selenium / Puppeteer) | SearXNG |
-|:-----------------------------------------|:-----------:|:---------------------------------------------:|:--------------------------------------------------:|:-------:|
-| 💰 Cost                                  | **Free forever** | Free tier → paid | Free | Free |
-| 🔑 API key required                      | **No** | Yes | No | No |
-| 🌐 Data leaves your machine              | **Never** | Always | Never | Depends on instance |
-| 🛡️ **Bypasses Cloudflare**               | ✅ **C++ patches** | N/A (uses APIs) | ❌ Detected instantly | ❌ HTTP-only |
-| 🔬 **Bypasses fingerprint tests**         | ✅ All major | N/A | ❌ Fails CreepJS | ❌ |
-| 🌍 Sites supported                       | **71 sites** | 1 (Google) | Anything you code | Aggregates ~10 SEs |
-| 🐍 JS rendering                          | ✅ Full Chromium | ❌ API-only | ✅ Yes | ❌ HTTP only |
-| 🔐 Login-walled sites                    | ✅ Cookie import | ❌ | Limited | ❌ |
-| 🚀 Setup                                 | `pip install` | Sign up + API key | Code from scratch | Docker + config |
-| 💾 Self-hosted server needed             | No | No | No | Yes |
+The web search landscape for AI agents in 2026 is unpleasant. Hosted APIs are getting **more expensive while LLMs get cheaper** ([HN discussion](https://news.ycombinator.com/item?id=43921238)), and many of them now explicitly **prohibit AI-agent use in their ToS** ([Brave Search API](https://news.ycombinator.com/item?id=46822822)). Browser scrapers without stealth get blocked by Cloudflare instantly. AgentSearch is the alternative.
+
+|                                          | **AgentSearch** | Tavily / Serper | Firecrawl-MCP<br>(6.3k⭐) | Exa-MCP<br>(4.5k⭐) | Brave Search API | DDG-MCP<br>(1.2k⭐) | SearXNG | Selenium /<br>Puppeteer |
+|:-----------------------------------------|:-----------:|:---------------:|:------------------------:|:------------------:|:----------------:|:-------------------:|:-------:|:----------------------:|
+| 💰 **Price**                             | **Free** | Tavily $30+/mo, Serper $50+/mo | $19+/mo | $10+/mo | **$9 / 1k queries** | Free | Free | Free |
+| 🔑 **API key required**                  | **No** | Yes | Yes | Yes | Yes | No | No | No |
+| 🚦 **Rate limit**                        | **None** | 1k/mo free → paid | 500/mo free → paid | 1k/mo free → paid | 2k/mo @ 1 TPS | None (DDG-side) | None | None |
+| ⚖️ **TOS allows AI use**                 | ✅ Yes | ✅ | ✅ | ✅ | ❌ **Forbidden** | ✅ | ✅ | ✅ |
+| 🔌 **MCP server included**               | ✅ Yes | ⚠️ Third-party | ✅ Official | ✅ Official | ⚠️ Third-party | ✅ | ❌ | ❌ |
+| 🌍 **Sites supported**                   | **71** | 1 (web index) | 1 (web index) | 1 (neural index) | 1 (web index) | 1 | ~10 SE aggregator | DIY |
+| 🛡️ **Bypasses Cloudflare**               | ✅ **C++ patches** | N/A (uses APIs) | N/A | N/A | N/A | ❌ | ❌ HTTP-only | ❌ Detected instantly |
+| 🐍 **JS rendering**                      | ✅ Full Chromium | ❌ API-only | ✅ | ❌ | ❌ | ❌ | ❌ | ✅ |
+| 🌐 **Data leaves your machine**          | **Never** | Always | Always | Always | Always | Always | Depends | Never |
+| 📰 **Engine-specific fields**            | ✅ IMDB rating, arXiv ID,<br>YouTube views, Reddit score… | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | DIY |
+
+> **For agent builders specifically**: Brave Search's TOS explicitly forbids using results "for AI inference" — so every Cursor/Cline/Claude/OpenClaw/Continue user wired to brave-search-mcp is technically in violation. AgentSearch sidesteps this entirely: we don't call any third-party API. Each user's Chromium hits Google/Bing/Reddit/etc. directly from their own machine, the same way their browser does.
 
 ---
 
@@ -217,7 +228,109 @@ Now your OpenClaw / Codex / Kiro agent natively knows how to search 71 sites —
 
 ---
 
+## 🔌 Use as an MCP Server (Cursor / Cline / Claude Desktop / Continue / Roo Code)
+
+AgentSearch ships with a **Model Context Protocol** server, so any MCP-compatible client gets `search` / `extract` / `list_engines` tools out of the box — no glue code, no API keys.
+
+### Install
+
+```bash
+pip install -e ".[mcp]"      # adds the `mcp` Python SDK
+```
+
+### Configure your client
+
+<details open>
+<summary><b>Claude Desktop</b> · <code>~/Library/Application Support/Claude/claude_desktop_config.json</code></summary>
+
+```json
+{
+  "mcpServers": {
+    "agent-search": {
+      "command": "/path/to/venv/bin/python",
+      "args": ["-m", "cloak_stealth_suite.mcp_server"]
+    }
+  }
+}
+```
+</details>
+
+<details>
+<summary><b>Cursor</b> · <code>.cursor/mcp.json</code> in your repo (or <code>~/.cursor/mcp.json</code> globally)</summary>
+
+```json
+{
+  "mcpServers": {
+    "agent-search": {
+      "command": "/path/to/venv/bin/python",
+      "args": ["-m", "cloak_stealth_suite.mcp_server"]
+    }
+  }
+}
+```
+</details>
+
+<details>
+<summary><b>Cline / Continue / Roo Code</b> · their MCP settings UI</summary>
+
+Same shape — point ``command`` at the venv's Python and ``args`` at ``-m cloak_stealth_suite.mcp_server``. The exact config file path varies; consult each client's docs.
+</details>
+
+<details>
+<summary><b>OpenClaw</b> · already supported via the bundled <code>agent-search</code> skill</summary>
+
+```bash
+cp -r skills/agent-search ~/.openclaw/workspace/skills/
+```
+
+OpenClaw will auto-load the skill and the agent will reach for AgentSearch whenever a query needs live web data.
+</details>
+
+### What your agent gets
+
+| Tool | What it does | When to call |
+|---|---|---|
+| ``search(query, engine, limit)`` | Run one of 71 search engines | Any time you need fresh web hits |
+| ``extract(url, paginate, max_scrolls)`` | Fetch a URL, return Markdown + metadata | After ``search`` returns a hit you want to read |
+| ``list_engines()`` | Enumerate engines + categories | When you're not sure which engine to use |
+
+The server keeps a single Chromium alive across calls and recycles it every 25 calls (configurable via ``AGENTSEARCH_RECYCLE_AFTER``), so each tool call after the first costs <100ms of overhead instead of the full ~1.5s startup.
+
+---
+
 ## 🍳 Cookbook — Common Recipes
+
+<details>
+<summary><b>📰 Extract a URL as clean Markdown (readability + auto-pagination)</b></summary>
+
+```bash
+# Get the title, author, date, and full article body — paginates lazy content,
+# strips ads/nav/chrome, returns Markdown ready for an LLM context.
+python -m cloak_stealth_suite.cli extract \
+  "https://news.ycombinator.com/item?id=43936992" --json | jq .
+
+# Returns:
+# {
+#   "url": "...",
+#   "status": "ok",
+#   "title": "Updated rate limits for unauthenticated requests",
+#   "author": "...",
+#   "date": "2025-05-09",
+#   "content_markdown": "...",          # full thread, ~7900 words
+#   "content_text": "...",
+#   "word_count": 7936,
+#   "extractor": "trafilatura",
+#   "scrolls": 1,
+#   "load_more_clicks": 0
+# }
+
+# Skip auto-scroll for fast static pages
+python -m cloak_stealth_suite.cli extract "https://example.com/blog" --json --no-paginate
+
+# Pretty-print as Markdown to stdout
+python -m cloak_stealth_suite.cli extract "https://example.com/blog" --format markdown
+```
+</details>
 
 <details>
 <summary><b>📚 Research a topic across multiple sources</b></summary>
