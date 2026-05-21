@@ -244,7 +244,204 @@ cp -r skills/agent-search ~/.openclaw/workspace/skills/
 
 ---
 
+## 🔌 作为 MCP Server 使用（Cursor / Cline / Claude Desktop / Continue / Roo Code）
+
+AgentSearch 自带 **Model Context Protocol** 服务器，任何兼容 MCP 的客户端开箱即得 `search` / `extract` / `list_engines` 三个工具 — 不用写胶水代码、不用 API Key。
+
+### 安装
+
+```bash
+pip install -e ".[mcp]"      # 安装 mcp Python SDK
+```
+
+### 配置客户端
+
+<details open>
+<summary><b>Claude Desktop</b> · <code>~/Library/Application Support/Claude/claude_desktop_config.json</code></summary>
+
+```json
+{
+  "mcpServers": {
+    "agent-search": {
+      "command": "/path/to/venv/bin/python",
+      "args": ["-m", "agent_search.mcp_server"]
+    }
+  }
+}
+```
+</details>
+
+<details>
+<summary><b>Cursor</b> · 仓库内 <code>.cursor/mcp.json</code>（或全局 <code>~/.cursor/mcp.json</code>）</summary>
+
+```json
+{
+  "mcpServers": {
+    "agent-search": {
+      "command": "/path/to/venv/bin/python",
+      "args": ["-m", "agent_search.mcp_server"]
+    }
+  }
+}
+```
+</details>
+
+<details>
+<summary><b>Cline / Continue / Roo Code</b> · 在它们各自的 MCP 设置 UI 里</summary>
+
+格式相同 — `command` 指向 venv 里的 Python，`args` 设为 `-m agent_search.mcp_server`。具体配置文件路径各家不同，参见各自文档。
+</details>
+
+<details>
+<summary><b>OpenClaw</b> · 已通过自带的 <code>agent-search</code> skill 支持</summary>
+
+```bash
+cp -r skills/agent-search ~/.openclaw/workspace/skills/
+```
+
+OpenClaw 会自动加载这个 skill，agent 在需要新鲜网络数据时会自动调用 AgentSearch。
+</details>
+
+### Agent 拿到的工具
+
+| 工具 | 作用 | 何时调用 |
+|---|---|---|
+| `search(query, engine, limit)` | 跑 80 个搜索引擎之一 | 任何需要新鲜网络结果时 |
+| `extract(url, paginate, max_scrolls)` | 抓 URL，返回 Markdown + 元数据 | 在 `search` 返回后想读全文时 |
+| `list_engines()` | 列出所有引擎 + 类目 | 不知道该用哪个引擎时 |
+
+服务器会在多次调用之间复用同一个 Chromium，每 25 次调用回收一次（可通过 `AGENTSEARCH_RECYCLE_AFTER` 调整），所以除了第一次调用外，后续调用的开销 <100ms，而不是完整的 ~1.5s 启动。
+
+---
+
+## 🌐 自托管 HTTP API（`agentsearch.serve`）
+
+当 MCP 不可用时 — 云端 worker、Docker 容器、远程脚本、纯 HTTP 框架 — 把 AgentSearch 跑成一个轻量 HTTP 服务。同一套引擎池、同样的反爬能力、简单的 JSON API。
+
+```bash
+# 仅监听 localhost（不需要鉴权）：
+python -m agent_search.serve --port 8088
+
+# 绑定网络（需要鉴权）：
+AGENTSEARCH_TOKEN=mysecret python -m agent_search.serve --host 0.0.0.0 --port 8088
+```
+
+接口列表：
+
+| 方法 · 路径 | Body / 参数 | 返回 |
+|---|---|---|
+| `GET  /health` | — | `{"status": "ok"}` |
+| `GET  /list-engines` | — | `{count, engines[]}` |
+| `POST /search` | `{query, engine?, limit?, depth?, profile?}` | 结果数组 |
+| `POST /search-many` | `{query, engines[], limit?, timeout?}` | 各引擎 + 合并后的结果 |
+| `POST /extract` | `{url, paginate?, max_scrolls?, links?, images?, profile?}` | 抽取后的 Markdown |
+
+```bash
+# 快速示例
+curl localhost:8088/health
+curl -X POST -H 'Content-Type: application/json' \
+     -d '{"query":"transformer","engine":"arxiv","limit":3}' \
+     localhost:8088/search
+```
+
+> **为什么是单线程？** CloakBrowser 用的是 Playwright 的 *sync* API，每个浏览器会绑定到启动它的线程上。多线程服务器会跨线程访问 Browser。自托管单用户场景本来就不需要并发。多 agent 并发 → 在不同端口跑多个实例。
+>
+> **网络安全**：服务器在没有 bearer token 的情况下拒绝绑定 `0.0.0.0`，避免误暴露到公网。
+
+---
+
+## 🧪 质量监控 — 本地 canary
+
+每个适配器都依赖目标站的 live DOM。站点天天在变，所以我们做了 `agentsearch canary` 来自动检测回归。
+
+**在本地跑，不要在 CI 上跑。** GitHub Actions runner 用的是 Azure 数据中心 IP，Reddit / Cloudflare / DataDome 已经预先封锁了这些 IP，CI 上跑 canary 全是噪声不是信号。推荐做法是在你自己的机器上加个每日定时的 launchd / systemd-timer / cron 任务：
+
+```bash
+agentsearch canary --gh-issue
+```
+
+Canary 做的事：
+
+- 并发跑一个 canary 查询通过每个适配器
+- 把每个引擎分类为 **PASS**（≥1 条结果）、**EMPTY**（干净跑完但 0 条 = 大概率 DOM 漂移）或 **FAIL**（异常）
+- 写出 `canary_report.json` 供下游工具消费
+- 当 `(EMPTY + FAIL) / total > 20%` 时，通过 `gh` CLI 自动开（或追加评论到）一个打了 `canary-regression` 标签的 GitHub issue
+
+```bash
+# 全量扫描（约 5 分钟，80 个引擎，并发 4）
+agentsearch canary
+
+# 只扫指定子集
+agentsearch canary --engines duckduckgo,reddit,arxiv
+
+# 阈值触发时自动开 GitHub issue
+agentsearch canary --gh-issue
+
+# 没装 `gh` CLI？生成 markdown 让你手动粘贴：
+agentsearch canary --issue-md /tmp/canary-issue.md
+```
+
+参见 [`docs/CANARY.md`](docs/CANARY.md)，里面有现成的 `launchd` / `systemd` / `cron` 模板，以及 [`skills/agentsearch-canary/`](skills/agentsearch-canary/) 这个负责每日跑 canary 的 OpenClaw skill。
+
+> 仓库里还留了一个手动触发的 workflow（`.github/workflows/canary-on-demand.yml`）作为"点按钮兜底确认"用 — 它**没有**定时调度，这是有意为之。
+
+---
+
 ## 🍳 Cookbook — 常见用法
+
+<details>
+<summary><b>🔐 登录一次,后续永久复用 session</b></summary>
+
+Twitter/X、LinkedIn、Glassdoor、Discord、Instagram 这类站点匿名访问基本拿不到任何有用内容。`agentsearch login` 一次，在弹出的 headed CloakBrowser 窗口里登录，之后每次 `search` / `extract` 都会自动带上 session — 而且**不会丢失反爬能力**（CloakBrowser 的 C++ 反检测补丁仍然生效，不像那些走 Chrome-CDP 的工具会暴露真实 Chrome 指纹）。
+
+```bash
+# 弹出 headed 窗口手动登录，回到终端按 Enter 保存：
+agentsearch login twitter
+agentsearch login linkedin
+agentsearch login glassdoor
+
+# 后续调用任何命令都带上 --profile：
+agentsearch search "from:elonmusk AI" --engine twitter --profile twitter --limit 10
+agentsearch extract "https://www.linkedin.com/in/<handle>/" --profile linkedin --json
+
+# 自定义站点？传 --url 覆盖登录入口：
+agentsearch login mysite --url https://mysite.com/auth/signin
+```
+
+Profile 存在 `~/.cache/agentsearch/profiles/<name>/`（可通过 `AGENTSEARCH_PROFILES_DIR` 修改）。`--profile <name>` 默认使用你执行 `login` 时传的站点名。Profile 完整保存 cookies、localStorage、IndexedDB、service workers — 形态跟一个真实的 Chrome profile 一样。
+</details>
+
+<details>
+<summary><b>📰 抓 URL 转干净 Markdown（readability + 自动翻页）</b></summary>
+
+```bash
+# 抓标题 / 作者 / 日期 / 全文正文 — 自动翻页加载惰性内容、剥掉广告和导航，
+# 返回 LLM-friendly 的 Markdown
+agentsearch extract \
+  "https://news.ycombinator.com/item?id=43936992" --json | jq .
+
+# 返回:
+# {
+#   "url": "...",
+#   "status": "ok",
+#   "title": "Updated rate limits for unauthenticated requests",
+#   "author": "...",
+#   "date": "2025-05-09",
+#   "content_markdown": "...",          # 完整楼主帖+所有评论, 约 7900 字
+#   "content_text": "...",
+#   "word_count": 7936,
+#   "extractor": "trafilatura",
+#   "scrolls": 1,
+#   "load_more_clicks": 0
+# }
+
+# 静态页面跳过自动滚动加快速度
+agentsearch extract "https://example.com/blog" --json --no-paginate
+
+# 直接打印 Markdown 到 stdout（不要 JSON 包裹）
+agentsearch extract "https://example.com/blog" --format markdown
+```
+</details>
 
 <details>
 <summary><b>📚 多源研究一个主题</b></summary>
@@ -295,6 +492,79 @@ agentsearch search "科技"     --engine weibo
 ```bash
 agentsearch search "llama" --engine huggingface --json
 # 返回 model_id / author / downloads / likes / pipeline_tag / library / tags
+```
+</details>
+
+<details>
+<summary><b>⚡ 多引擎并行扇出 + URL 去重</b></summary>
+
+```bash
+# 并发跑 3-5 个引擎,墙上时间 ≈ 最慢的那个引擎,而不是各自相加。
+# 多个引擎都返回的 URL 会被识别为「共识结果」浮到合并 feed 顶部。
+agentsearch search-many "open source MCP web search" \
+    --engines duckduckgo,hackernews,github --limit 5 --merged --json
+
+# 或者直接用预设 bundle（内置快捷指令）：
+agentsearch jobs    "data engineer"             # linkedin_jobs+indeed+ziprecruiter+glassdoor
+agentsearch travel  "kyoto"                     # booking + expedia
+agentsearch news    "fed rate decision"         # reuters+ap+bbc+guardian+npr
+agentsearch code    "kubernetes ingress yaml"   # github+stackoverflow+HN
+agentsearch research "diffusion transformer"    # ddg+google+reddit+HN
+```
+</details>
+
+<details>
+<summary><b>📰 一次拿 SERP + 正文（--depth N）</b></summary>
+
+```bash
+# 顶部 N 条结果直接附带 body_markdown / body_word_count 字段 —
+# agent 不用再发起后续 extract 调用
+agentsearch search "Brave Search API forbids AI" \
+    --engine hackernews --limit 5 --depth 3 --json
+```
+</details>
+
+<details>
+<summary><b>🚦 健康感知兜底（--fallback）</b></summary>
+
+```bash
+# 试主选引擎；返回空 / 报错时,沿着按近期成功率排序的兜底链一路降级。
+# 引擎健康度记录在 ~/.cache/agentsearch/health.json,跨调用累积。
+agentsearch search "X" --engine google --fallback --json
+
+# 自定义兜底链：
+agentsearch search "X" --engine google \
+    --fallback --fallback-chain duckduckgo,bing,startpage --json
+
+# 查看本地健康度表（按综合分数排序）：
+agentsearch status
+```
+</details>
+
+<details>
+<summary><b>💼 跨 LinkedIn / Indeed / ZipRecruiter / Glassdoor 比对岗位</b></summary>
+
+```bash
+agentsearch jobs "site reliability engineer in Berlin" --limit 5 --json | jq .
+# 合并 feed 顶部 = 共识岗位（多个招聘板都收录的同一 URL）
+```
+</details>
+
+<details>
+<summary><b>🗺️ Google Maps 本地商家搜索</b></summary>
+
+```bash
+agentsearch search "ramen tokyo" --engine google_maps --limit 5 --json
+# 返回 name / url / rating / review_count / address / category / phone / website
+```
+</details>
+
+<details>
+<summary><b>📈 Yahoo Finance 股票快速查询</b></summary>
+
+```bash
+agentsearch search "apple" --engine yahoo_finance --limit 3 --json
+# 返回 symbol / name / last_price / exchange / asset_type
 ```
 </details>
 
