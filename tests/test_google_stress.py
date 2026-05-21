@@ -26,8 +26,8 @@ _PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if _PROJECT_ROOT not in sys.path:
     sys.path.insert(0, _PROJECT_ROOT)
 
-from cloak_stealth_suite import core
-from cloak_stealth_suite.engines.google import GoogleEngine
+from agent_search import core
+from agent_search.engines.google import GoogleEngine
 
 
 @dataclass

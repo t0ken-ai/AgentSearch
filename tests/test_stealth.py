@@ -51,13 +51,13 @@ from dataclasses import dataclass, field, asdict
 from pathlib import Path
 from typing import Any
 
-from cloak_stealth_suite import core
-from cloak_stealth_suite.stealth.enhance import apply_stealth, check_blocked
-from cloak_stealth_suite.engines.google import GoogleEngine
-from cloak_stealth_suite.engines.bing import BingEngine
-from cloak_stealth_suite.engines.duckduckgo import DuckDuckGoEngine
-from cloak_stealth_suite.engines.reddit import RedditEngine
-from cloak_stealth_suite.engines.twitter import TwitterEngine
+from agent_search import core
+from agent_search.stealth.enhance import apply_stealth, check_blocked
+from agent_search.engines.google import GoogleEngine
+from agent_search.engines.bing import BingEngine
+from agent_search.engines.duckduckgo import DuckDuckGoEngine
+from agent_search.engines.reddit import RedditEngine
+from agent_search.engines.twitter import TwitterEngine
 
 
 ROOT = Path(__file__).resolve().parent

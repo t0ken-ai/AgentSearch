@@ -25,9 +25,9 @@ _PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if _PROJECT_ROOT not in sys.path:
     sys.path.insert(0, _PROJECT_ROOT)
 
-from cloak_stealth_suite import core
-from cloak_stealth_suite.engines.qwant import QwantEngine
-from cloak_stealth_suite.stealth.enhance import check_blocked
+from agent_search import core
+from agent_search.engines.qwant import QwantEngine
+from agent_search.stealth.enhance import check_blocked
 
 
 QUERY = "open source"
@@ -113,7 +113,7 @@ def main() -> int:
         )
         # Still load the engine so the module is exercised.
         try:
-            from cloak_stealth_suite.engines.qwant import (
+            from agent_search.engines.qwant import (
                 QwantEngine as _Q,
             )  # noqa: F401
             print("Module import: OK")

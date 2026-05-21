@@ -29,10 +29,10 @@
 ```bash
 pip install cloakbrowser && pip install -e .
 
-python -m cloak_stealth_suite.cli search "人工智能新闻"     --engine google --json
-python -m cloak_stealth_suite.cli search "Python 教程"      --engine bilibili --limit 10
-python -m cloak_stealth_suite.cli search "推荐笔记本 2025"  --engine reddit
-python -m cloak_stealth_suite.cli search "transformer 注意力" --engine arxiv
+agentsearch search "人工智能新闻"     --engine google --json
+agentsearch search "Python 教程"      --engine bilibili --limit 10
+agentsearch search "推荐笔记本 2025"  --engine reddit
+agentsearch search "transformer 注意力" --engine arxiv
 ```
 
 71 个站点。一个 CLI。**完全跑在你的机器上。绕过 Cloudflare、PerimeterX、Akamai、DataDome 以及所有已知的指纹检测系统。**
@@ -84,7 +84,7 @@ python -m cloak_stealth_suite.cli search "transformer 注意力" --engine arxiv
 
 ## 🌍 全部 71 个站点 — 按类目
 
-> 每个站点都是一个独立的适配器（`cloak_stealth_suite/engines/<name>.py`），并附带可独立运行的测试（`tests/test_<name>.py`）。
+> 每个站点都是一个独立的适配器（`agent_search/engines/<name>.py`），并附带可独立运行的测试（`tests/test_<name>.py`）。
 
 <table>
 <tr>
@@ -164,38 +164,38 @@ pip install -e .
 
 ```bash
 # 通用搜索
-python -m cloak_stealth_suite.cli search "最新 AI 新闻" --engine google
+agentsearch search "最新 AI 新闻" --engine google
 
 # 在 StackOverflow 查找代码问题
-python -m cloak_stealth_suite.cli search "TypeError pandas groupby" --engine stackoverflow
+agentsearch search "TypeError pandas groupby" --engine stackoverflow
 
 # 最新论文
-python -m cloak_stealth_suite.cli search "transformer scaling laws" --engine arxiv
+agentsearch search "transformer scaling laws" --engine arxiv
 
 # Reddit 讨论
-python -m cloak_stealth_suite.cli search "推荐 linux 笔记本 2025" --engine reddit
+agentsearch search "推荐 linux 笔记本 2025" --engine reddit
 
 # 视频教程
-python -m cloak_stealth_suite.cli search "react hooks" --engine youtube --limit 10
+agentsearch search "react hooks" --engine youtube --limit 10
 
 # 电商
-python -m cloak_stealth_suite.cli search "机械键盘" --engine amazon
+agentsearch search "机械键盘" --engine amazon
 
 # 中文平台
-python -m cloak_stealth_suite.cli search "机器学习" --engine zhihu
+agentsearch search "机器学习" --engine zhihu
 
 # JSON 输出，给其他工具消费
-python -m cloak_stealth_suite.cli search "open source" --engine github --json | jq .
+agentsearch search "open source" --engine github --json | jq .
 
 # 列出所有可用引擎
-python -m cloak_stealth_suite.cli list-engines
+agentsearch list-engines
 ```
 
 ### 3. Python 集成
 
 ```python
-from cloak_stealth_suite.core import launch, BrowserConfig, new_page
-from cloak_stealth_suite.engines.google import GoogleEngine
+from agent_search.core import launch, BrowserConfig, new_page
+from agent_search.engines.google import GoogleEngine
 
 browser = launch(BrowserConfig(headless=True, humanize=True))
 try:
@@ -224,10 +224,10 @@ cp -r skills/agent-search ~/.openclaw/workspace/skills/
 
 ```bash
 # 多引擎扇出 + 合并
-python -m cloak_stealth_suite.cli search "X" --engine google     --limit 5 --json > /tmp/g.json
-python -m cloak_stealth_suite.cli search "X" --engine reddit     --limit 5 --json > /tmp/r.json
-python -m cloak_stealth_suite.cli search "X" --engine arxiv      --limit 3 --json > /tmp/a.json
-python -m cloak_stealth_suite.cli search "X" --engine hackernews --limit 5 --json > /tmp/h.json
+agentsearch search "X" --engine google     --limit 5 --json > /tmp/g.json
+agentsearch search "X" --engine reddit     --limit 5 --json > /tmp/r.json
+agentsearch search "X" --engine arxiv      --limit 3 --json > /tmp/a.json
+agentsearch search "X" --engine hackernews --limit 5 --json > /tmp/h.json
 ```
 </details>
 
@@ -235,8 +235,8 @@ python -m cloak_stealth_suite.cli search "X" --engine hackernews --limit 5 --jso
 <summary><b>🛒 电商比价</b></summary>
 
 ```bash
-python -m cloak_stealth_suite.cli search "AirPods Pro 2" --engine amazon --json
-python -m cloak_stealth_suite.cli search "AirPods Pro 2" --engine ebay   --json
+agentsearch search "AirPods Pro 2" --engine amazon --json
+agentsearch search "AirPods Pro 2" --engine ebay   --json
 ```
 </details>
 
@@ -244,9 +244,9 @@ python -m cloak_stealth_suite.cli search "AirPods Pro 2" --engine ebay   --json
 <summary><b>🎬 电影 + 书 + 播客一站查全</b></summary>
 
 ```bash
-python -m cloak_stealth_suite.cli search "Dune"           --engine imdb           --json
-python -m cloak_stealth_suite.cli search "Dune"           --engine goodreads      --json
-python -m cloak_stealth_suite.cli search "Frank Herbert"  --engine apple_podcasts --json
+agentsearch search "Dune"           --engine imdb           --json
+agentsearch search "Dune"           --engine goodreads      --json
+agentsearch search "Frank Herbert"  --engine apple_podcasts --json
 ```
 </details>
 
@@ -256,9 +256,9 @@ python -m cloak_stealth_suite.cli search "Frank Herbert"  --engine apple_podcast
 ```bash
 # 这些适配器内置 Google → Bing → DuckDuckGo 三级 site: 兜底链路 —
 # 不需要 cookies、不需要登录，开箱即用
-python -m cloak_stealth_suite.cli search "旅行攻略" --engine xiaohongshu
-python -m cloak_stealth_suite.cli search "美食"     --engine douyin
-python -m cloak_stealth_suite.cli search "科技"     --engine weibo
+agentsearch search "旅行攻略" --engine xiaohongshu
+agentsearch search "美食"     --engine douyin
+agentsearch search "科技"     --engine weibo
 ```
 </details>
 
@@ -266,7 +266,7 @@ python -m cloak_stealth_suite.cli search "科技"     --engine weibo
 <summary><b>🤖 在 HuggingFace 找模型 / 数据集</b></summary>
 
 ```bash
-python -m cloak_stealth_suite.cli search "llama" --engine huggingface --json
+agentsearch search "llama" --engine huggingface --json
 # 返回 model_id / author / downloads / likes / pipeline_tag / library / tags
 ```
 </details>
@@ -315,7 +315,7 @@ python -m cloak_stealth_suite.cli search "llama" --engine huggingface --json
 
 ```
 AgentSearch/
-├── cloak_stealth_suite/
+├── agent_search/
 │   ├── core.py               ← 浏览器启动 + 配置
 │   ├── cli.py                ← 命令行接口
 │   ├── engines/              ← 60+ 个适配器（一个站一个文件）
@@ -390,7 +390,7 @@ class MySiteEngine(BaseEngine):
 
 欢迎 PR，特别是：
 
-- 🆕 新的网站适配器（参考 `cloak_stealth_suite/engines/` 中的示例）
+- 🆕 新的网站适配器（参考 `agent_search/engines/` 中的示例）
 - 🐛 现有适配器的 Bug 修复
 - 🎯 改进的反检测技术
 - 🌐 文档与翻译

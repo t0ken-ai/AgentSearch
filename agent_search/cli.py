@@ -1,4 +1,4 @@
-"""CLI tool for Cloak Stealth Suite."""
+"""CLI tool for AgentSearch."""
 
 import argparse
 import importlib
@@ -13,7 +13,7 @@ from functools import lru_cache
 from .core import launch, new_page, BrowserConfig
 
 # Explicit short-alias map. Maps `--engine` value → `(module, class)`.
-# Anything NOT in here is auto-discovered from cloak_stealth_suite/engines/.
+# Anything NOT in here is auto-discovered from agent_search/engines/.
 _ALIASES: dict[str, tuple[str, str]] = {
     # Common short aliases.
     "ddg":         ("duckduckgo",        "DuckDuckGoEngine"),
@@ -28,7 +28,7 @@ _ALIASES: dict[str, tuple[str, str]] = {
 
 @lru_cache(maxsize=1)
 def _engine_registry() -> dict[str, tuple[str, str]]:
-    """Discover every BaseEngine subclass under cloak_stealth_suite.engines.
+    """Discover every BaseEngine subclass under agent_search.engines.
 
     Returns a mapping from canonical short name (module basename) to a
     ``(module_path, class_name)`` tuple. The discovery is cached after the
@@ -43,7 +43,7 @@ def _engine_registry() -> dict[str, tuple[str, str]]:
     for finder, modname, ispkg in pkgutil.iter_modules(engines_pkg.__path__):
         if modname.startswith("_") or modname == "base":
             continue
-        full = f"cloak_stealth_suite.engines.{modname}"
+        full = f"agent_search.engines.{modname}"
         try:
             mod = importlib.import_module(full)
         except Exception as e:
@@ -83,7 +83,7 @@ def _get_engine(name: str):
         raise ValueError(f"Unknown engine: {name!r}. Available: {available}")
     module_basename, class_name = spec
     module = importlib.import_module(
-        f"cloak_stealth_suite.engines.{module_basename}"
+        f"agent_search.engines.{module_basename}"
     )
     return getattr(module, class_name)
 
@@ -414,7 +414,7 @@ def cmd_status(args):
 def main():
     logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
 
-    parser = argparse.ArgumentParser(prog="cloak", description="Cloak Stealth Suite CLI")
+    parser = argparse.ArgumentParser(prog="cloak", description="AgentSearch CLI")
     sub = parser.add_subparsers(dest="command")
 
     # search

@@ -23,17 +23,17 @@ _PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if _PROJECT_ROOT not in sys.path:
     sys.path.insert(0, _PROJECT_ROOT)
 
-from cloak_stealth_suite import core
-from cloak_stealth_suite.engines.bbc import BBCEngine
-from cloak_stealth_suite.engines.guardian import GuardianEngine
-from cloak_stealth_suite.engines.reuters import ReutersEngine
-from cloak_stealth_suite.engines.apnews import APNewsEngine
-from cloak_stealth_suite.engines.cnn import CNNEngine
-from cloak_stealth_suite.engines.npr import NPREngine
-from cloak_stealth_suite.engines.aljazeera import AlJazeeraEngine
-from cloak_stealth_suite.engines.techcrunch import TechCrunchEngine
-from cloak_stealth_suite.engines.verge import VergeEngine
-from cloak_stealth_suite.engines.arstechnica import ArsTechnicaEngine
+from agent_search import core
+from agent_search.engines.bbc import BBCEngine
+from agent_search.engines.guardian import GuardianEngine
+from agent_search.engines.reuters import ReutersEngine
+from agent_search.engines.apnews import APNewsEngine
+from agent_search.engines.cnn import CNNEngine
+from agent_search.engines.npr import NPREngine
+from agent_search.engines.aljazeera import AlJazeeraEngine
+from agent_search.engines.techcrunch import TechCrunchEngine
+from agent_search.engines.verge import VergeEngine
+from agent_search.engines.arstechnica import ArsTechnicaEngine
 
 
 @dataclass

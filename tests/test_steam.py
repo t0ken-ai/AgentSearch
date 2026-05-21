@@ -24,8 +24,8 @@ if _PROJECT_ROOT not in sys.path:
     sys.path.insert(0, _PROJECT_ROOT)
 import traceback
 
-from cloak_stealth_suite import core
-from cloak_stealth_suite.engines.steam import SteamEngine
+from agent_search import core
+from agent_search.engines.steam import SteamEngine
 
 
 QUERY = "Cyberpunk"

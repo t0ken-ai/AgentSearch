@@ -37,9 +37,9 @@ if _PROJECT_ROOT not in sys.path:
 import time
 import traceback
 
-from cloak_stealth_suite import core
-from cloak_stealth_suite.engines.quora import QuoraSearchEngine
-from cloak_stealth_suite.stealth.enhance import check_blocked
+from agent_search import core
+from agent_search.engines.quora import QuoraSearchEngine
+from agent_search.stealth.enhance import check_blocked
 
 
 QUERY = "best programming language 2025"

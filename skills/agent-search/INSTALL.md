@@ -82,8 +82,8 @@ follows one of the recipes there. Example user prompts that should fire:
 ```bash
 source ~/tools/cloakbrowser/venv/bin/activate
 cd ~/projects/AgentSearch
-python -m cloak_stealth_suite.cli list-engines  # expects 71+ entries
-python -m cloak_stealth_suite.cli search "transformer scaling laws" \
+agentsearch list-engines  # expects 71+ entries
+agentsearch search "transformer scaling laws" \
     --engine arxiv --limit 3 --json | head -30
 ```
 

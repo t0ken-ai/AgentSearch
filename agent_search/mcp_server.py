@@ -15,7 +15,7 @@ polluted, etc.).
 
 Run with::
 
-    python -m cloak_stealth_suite.mcp_server
+    python -m agent_search.mcp_server
 
 Configure in Claude Desktop's ``claude_desktop_config.json``::
 
@@ -23,7 +23,7 @@ Configure in Claude Desktop's ``claude_desktop_config.json``::
       "mcpServers": {
         "agent-search": {
           "command": "/path/to/venv/bin/python",
-          "args": ["-m", "cloak_stealth_suite.mcp_server"]
+          "args": ["-m", "agent_search.mcp_server"]
         }
       }
     }

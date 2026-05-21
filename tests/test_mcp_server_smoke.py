@@ -1,6 +1,6 @@
 """End-to-end smoke test for the MCP server.
 
-Spawns ``python -m cloak_stealth_suite.mcp_server`` as a subprocess and
+Spawns ``python -m agent_search.mcp_server`` as a subprocess and
 talks to it over stdio using the MCP JSON-RPC framing. This is the same
 contract Claude Desktop / Cursor / Cline use, so a passing test means
 the server is plug-and-play in those clients.
@@ -34,7 +34,7 @@ def main():
     env = os.environ.copy()
     env["PYTHONUNBUFFERED"] = "1"
     proc = subprocess.Popen(
-        [sys.executable, "-m", "cloak_stealth_suite.mcp_server"],
+        [sys.executable, "-m", "agent_search.mcp_server"],
         stdin=subprocess.PIPE,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,

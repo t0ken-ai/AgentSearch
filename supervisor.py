@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Kiro Cloak Stealth Suite - 增量监督控制器 v2
+Kiro AgentSearch - 增量监督控制器 v2
 每轮只给一个小任务，避免超时
 """
 
@@ -66,7 +66,7 @@ pip install -e ~/projects/cloakbrowser-src
 - 如果 CloakBrowser API 不支持某个功能（如 proxy auth、特定 stealth 参数）
 - 如果某个网站能检测到自动化特征
 - 如果需要自定义 browser launch 参数
-- 优先在 cloak_stealth_suite 层面解决，如果不行再改 CloakBrowser 源码
+- 优先在 agent_search 层面解决，如果不行再改 CloakBrowser 源码
 """
 
 # 增量任务列表 — 每轮一个
@@ -83,7 +83,7 @@ source ~/tools/cloakbrowser/venv/bin/activate
 cd {dir}
 ```
 
-创建 cloak_stealth_suite/engines/wikivoyage.py：
+创建 agent_search/engines/wikivoyage.py：
 1. 使用 Wikivoyage 搜索: en.wikivoyage.org/w/index.php?search=xxx 或用 MediaWiki API
 2. 解析旅行指南: title, url, snippet
 3. 优先用 API (和 wikipedia 类似): en.wikivoyage.org/w/api.php?action=query&list=search&srsearch=xxx&format=json
@@ -107,7 +107,7 @@ source ~/tools/cloakbrowser/venv/bin/activate
 cd {dir}
 ```
 
-创建 cloak_stealth_suite/engines/pubmed.py：
+创建 agent_search/engines/pubmed.py：
 1. 使用 PubMed 搜索: pubmed.ncbi.nlm.nih.gov/?term=xxx
 2. 或用 PubMed API: eutils.ncbi.nlm.nih.gov/entrez/eutils/esearch.fcgi + efetch
 3. 解析论文: title, url (https://pubmed.ncbi.nlm.nih.gov/PMID/), authors, abstract snippet
@@ -132,7 +132,7 @@ source ~/tools/cloakbrowser/venv/bin/activate
 cd {dir}
 ```
 
-创建 cloak_stealth_suite/engines/steam.py：
+创建 agent_search/engines/steam.py：
 1. 使用 Steam Store 搜索: store.steampowered.com/search/?term=xxx
 2. 解析游戏: name, url, price, rating
 3. 处理年龄验证弹窗
@@ -156,7 +156,7 @@ source ~/tools/cloakbrowser/venv/bin/activate
 cd {dir}
 ```
 
-创建 cloak_stealth_suite/engines/torrent_1337x.py：
+创建 agent_search/engines/torrent_1337x.py：
 1. 使用 1337x 搜索: 1337x.to/search/xxx/1/
 2. 解析种子: name, url, seeders, leechers, size
 3. 返回 SearchResult 列表（带 seeders/size 扩展字段）
@@ -180,7 +180,7 @@ source ~/tools/cloakbrowser/venv/bin/activate
 cd {dir}
 ```
 
-创建 cloak_stealth_suite/engines/google_patents.py：
+创建 agent_search/engines/google_patents.py：
 1. 使用 Google Patents: patents.google.com/?q=xxx
 2. 解析专利: title, patent_id, url, assignee, abstract snippet, filing_date
 3. 处理可能的 consent 弹窗（复用 google.py 的经验）
@@ -204,7 +204,7 @@ source ~/tools/cloakbrowser/venv/bin/activate
 cd {dir}
 ```
 
-创建 cloak_stealth_suite/engines/linkedin_jobs.py：
+创建 agent_search/engines/linkedin_jobs.py：
 1. 使用 LinkedIn Jobs: linkedin.com/jobs/search/?keywords=xxx
 2. 解析职位: title, company, location, url, date_posted
 3. LinkedIn 可能需要处理登录弹窗
@@ -229,7 +229,7 @@ source ~/tools/cloakbrowser/venv/bin/activate
 cd {dir}
 ```
 
-创建 cloak_stealth_suite/engines/indeed.py：
+创建 agent_search/engines/indeed.py：
 1. 使用 Indeed 搜索: indeed.com/jobs?q=xxx
 2. 解析职位: title, company, location, url, salary, snippet
 3. Indeed 有反爬但相对温和
@@ -253,7 +253,7 @@ source ~/tools/cloakbrowser/venv/bin/activate
 cd {dir}
 ```
 
-创建 cloak_stealth_suite/engines/virustotal.py：
+创建 agent_search/engines/virustotal.py：
 1. 使用 VirusTotal: virustotal.com/gui/search/xxx
 2. VirusTotal 需要 API key 才能获取结构化数据
 3. 但页面搜索结果可以解析: detection ratio, file name, hash, community score
@@ -278,7 +278,7 @@ source ~/tools/cloakbrowser/venv/bin/activate
 cd {dir}
 ```
 
-创建 cloak_stealth_suite/engines/icecat.py：
+创建 agent_search/engines/icecat.py：
 1. 使用 Icecat 搜索: icecat.biz/en/search?q=xxx 或 icecat.nl/search
 2. 解析产品: name, brand, category, url, image, specs
 3. Icecat 有开放 API (https://api.icecat.biz/) 但需要注册
@@ -303,7 +303,7 @@ source ~/tools/cloakbrowser/venv/bin/activate
 cd {dir}
 ```
 
-创建 cloak_stealth_suite/engines/amazon.py：
+创建 agent_search/engines/amazon.py：
 1. 使用 Amazon 搜索: amazon.com/s?k=xxx
 2. 解析产品: name, url, price, rating, reviews_count, image_url
 3. 处理 CAPTCHA 验证（Amazon 反爬较强）
@@ -329,7 +329,7 @@ source ~/tools/cloakbrowser/venv/bin/activate
 cd {dir}
 ```
 
-创建 cloak_stealth_suite/engines/brave.py：
+创建 agent_search/engines/brave.py：
 1. 使用 Brave Search: search.brave.com/search?q=xxx
 2. 解析搜索结果: title, url, snippet
 3. Brave 反爬较弱，适合作为备选搜索引擎
@@ -353,7 +353,7 @@ source ~/tools/cloakbrowser/venv/bin/activate
 cd {dir}
 ```
 
-创建 cloak_stealth_suite/engines/wolfram.py：
+创建 agent_search/engines/wolfram.py：
 1. 使用 Wolfram Alpha: wolframalpha.com/input?i=xxx
 2. 解析计算结果: input_interpretation, result_pods, url
 3. Wolfram 页面是 JS 重度渲染，需要等待动态加载
@@ -377,7 +377,7 @@ source ~/tools/cloakbrowser/venv/bin/activate
 cd {dir}
 ```
 
-创建 cloak_stealth_suite/engines/archive_org.py：
+创建 agent_search/engines/archive_org.py：
 1. 使用 Internet Archive 搜索: archive.org/search?query=xxx
 2. 或用 Wayback Machine API: web.archive.org/web/*/example.com
 3. 解析结果: title, url, date, media_type, description
@@ -401,7 +401,7 @@ source ~/tools/cloakbrowser/venv/bin/activate
 cd {dir}
 ```
 
-创建 cloak_stealth_suite/engines/devto.py：
+创建 agent_search/engines/devto.py：
 1. 使用 dev.to 搜索: dev.to/search?q=xxx 或 API: dev.to/api/articles?per_page=5&tag=python
 2. 解析文章: title, url, author, tags, reactions_count, reading_time
 3. dev.to 有公开 API，优先使用
@@ -425,7 +425,7 @@ source ~/tools/cloakbrowser/venv/bin/activate
 cd {dir}
 ```
 
-创建 cloak_stealth_suite/engines/npm_search.py：
+创建 agent_search/engines/npm_search.py：
 1. 使用 NPM 搜索: npmjs.com/search?q=xxx 或 API: registry.npmjs.org/-/v1/search?text=xxx
 2. 解析包: name, url, version, description, downloads, license
 3. 优先用 NPM API (JSON 响应)
@@ -451,7 +451,7 @@ source ~/tools/cloakbrowser/venv/bin/activate
 cd {dir}
 ```
 
-创建 cloak_stealth_suite/engines/youtube.py：
+创建 agent_search/engines/youtube.py：
 1. 使用 YouTube 搜索: youtube.com/results?search_query=xxx
 2. 解析视频: title, url, channel, views, duration, upload_date
 3. YouTube 反爬较强，需要处理 consent 弹窗和 age verification
@@ -475,7 +475,7 @@ source ~/tools/cloakbrowser/venv/bin/activate
 cd {dir}
 ```
 
-创建 cloak_stealth_suite/engines/yelp.py：
+创建 agent_search/engines/yelp.py：
 1. 使用 Yelp 搜索: yelp.com/search?find_desc=xxx&find_loc=city
 2. 解析商家: name, url, rating, review_count, category, address, price_range
 3. 处理位置弹窗（可能要求输入位置）
@@ -499,7 +499,7 @@ source ~/tools/cloakbrowser/venv/bin/activate
 cd {dir}
 ```
 
-创建 cloak_stealth_suite/engines/spotify.py：
+创建 agent_search/engines/spotify.py：
 1. 使用 Spotify Web 搜索: open.spotify.com/search/xxx
 2. Spotify 页面是 React 渲染，需要等待加载
 3. 解析: title, url, artist, album, type (song/album/artist/playlist)
@@ -523,7 +523,7 @@ source ~/tools/cloakbrowser/venv/bin/activate
 cd {dir}
 ```
 
-创建 cloak_stealth_suite/engines/tiktok.py：
+创建 agent_search/engines/tiktok.py：
 1. 使用 TikTok 搜索: tiktok.com/search?q=xxx
 2. TikTok 反爬很强，可能需要登录
 3. 如果被拦，备选方案: 用 Google site:tiktok.com 搜索
@@ -548,7 +548,7 @@ source ~/tools/cloakbrowser/venv/bin/activate
 cd {dir}
 ```
 
-创建 cloak_stealth_suite/engines/instagram.py：
+创建 agent_search/engines/instagram.py：
 1. 使用 Instagram 搜索: instagram.com/explore/tags/xxx
 2. Instagram 需要登录，直接搜索可能被拦
 3. 备选方案: 用 Google site:instagram.com 搜索
@@ -573,7 +573,7 @@ source ~/tools/cloakbrowser/venv/bin/activate
 cd {dir}
 ```
 
-创建 cloak_stealth_suite/engines/twitch.py：
+创建 agent_search/engines/twitch.py：
 1. 使用 Twitch 搜索: twitch.tv/search?term=xxx
 2. 解析频道/直播: name, url, type (channel/live/video), viewers, game
 3. Twitch 有 API (https://dev.twitch.tv/) 但需要 key
@@ -598,7 +598,7 @@ source ~/tools/cloakbrowser/venv/bin/activate
 cd {dir}
 ```
 
-创建 cloak_stealth_suite/engines/netflix.py：
+创建 agent_search/engines/netflix.py：
 1. Netflix 搜索需要登录: netflix.com/search?q=xxx
 2. 未登录无法搜索，备选方案: 用 Google site:netflix.com 搜索
 3. 解析: title, url, type (movie/series), year, rating
@@ -621,7 +621,7 @@ source ~/tools/cloakbrowser/venv/bin/activate
 cd {dir}
 ```
 
-创建 cloak_stealth_suite/engines/reddit_subreddit.py：
+创建 agent_search/engines/reddit_subreddit.py：
 1. 使用 Reddit JSON API: reddit.com/r/{subreddit}.json?limit=25
 2. 这是 Reddit 的公开 JSON 接口，不需要 OAuth
 3. 解析帖子: title, url, author, score, num_comments, created_utc, selftext
@@ -648,7 +648,7 @@ source ~/tools/cloakbrowser/venv/bin/activate
 cd {dir}
 ```
 
-创建 cloak_stealth_suite/engines/baidu.py：
+创建 agent_search/engines/baidu.py：
 1. 使用百度搜索: baidu.com/s?wd=xxx
 2. 解析结果: title, url, snippet, source
 3. 百度有反爬，需要处理验证码弹窗
@@ -672,7 +672,7 @@ source ~/tools/cloakbrowser/venv/bin/activate
 cd {dir}
 ```
 
-创建 cloak_stealth_suite/engines/sogou.py：
+创建 agent_search/engines/sogou.py：
 1. 使用搜狗搜索: sogou.com/web?query=xxx
 2. 解析结果: title, url, snippet
 3. 返回 SearchResult 列表
@@ -695,7 +695,7 @@ source ~/tools/cloakbrowser/venv/bin/activate
 cd {dir}
 ```
 
-创建 cloak_stealth_suite/engines/so360.py：
+创建 agent_search/engines/so360.py：
 1. 使用 360 搜索: so.com/s?q=xxx
 2. 解析结果: title, url, snippet
 3. 返回 SearchResult 列表
@@ -718,7 +718,7 @@ source ~/tools/cloakbrowser/venv/bin/activate
 cd {dir}
 ```
 
-创建 cloak_stealth_suite/engines/startpage.py：
+创建 agent_search/engines/startpage.py：
 1. 使用 Startpage: startpage.com/sp/search?query=xxx
 2. Startpage 是隐私搜索引擎，代理 Google 结果
 3. 解析结果: title, url, snippet
@@ -742,7 +742,7 @@ source ~/tools/cloakbrowser/venv/bin/activate
 cd {dir}
 ```
 
-创建 cloak_stealth_suite/engines/ecosia.py：
+创建 agent_search/engines/ecosia.py：
 1. 使用 Ecosia: ecosia.org/search?q=xxx
 2. Ecosia 是绿色搜索引擎（基于 Bing）
 3. 解析结果: title, url, snippet
@@ -766,7 +766,7 @@ source ~/tools/cloakbrowser/venv/bin/activate
 cd {dir}
 ```
 
-创建 cloak_stealth_suite/engines/qwant.py：
+创建 agent_search/engines/qwant.py：
 1. 使用 Qwant: qwant.com/?q=xxx
 2. Qwant 是欧洲隐私搜索引擎
 3. 解析结果: title, url, snippet
@@ -790,7 +790,7 @@ source ~/tools/cloakbrowser/venv/bin/activate
 cd {dir}
 ```
 
-创建 cloak_stealth_suite/engines/bilibili.py：
+创建 agent_search/engines/bilibili.py：
 1. 使用 B站搜索: search.bilibili.com/all?keyword=xxx
 2. 解析视频: title, url, author, play_count, danmaku_count, duration
 3. B站搜索页是动态加载的，需要等待 JS 渲染
@@ -814,7 +814,7 @@ source ~/tools/cloakbrowser/venv/bin/activate
 cd {dir}
 ```
 
-创建 cloak_stealth_suite/engines/zhihu.py：
+创建 agent_search/engines/zhihu.py：
 1. 使用知乎搜索: zhihu.com/search?type=content&q=xxx
 2. 解析结果: title, url, excerpt, author, voteup_count, comment_count
 3. 知乎有反爬机制，可能需要处理登录弹窗
@@ -838,7 +838,7 @@ source ~/tools/cloakbrowser/venv/bin/activate
 cd {dir}
 ```
 
-创建 cloak_stealth_suite/engines/xiaohongshu.py：
+创建 agent_search/engines/xiaohongshu.py：
 1. 使用小红书搜索: xiaohongshu.com/search_result?keyword=xxx
 2. 小红书反爬很强，需要登录 cookie
 3. 备选方案: 用 Google site:xiaohongshu.com 搜索
@@ -863,7 +863,7 @@ source ~/tools/cloakbrowser/venv/bin/activate
 cd {dir}
 ```
 
-创建 cloak_stealth_suite/engines/douyin.py：
+创建 agent_search/engines/douyin.py：
 1. 使用抖音搜索: douyin.com/search/xxx
 2. 抖音反爬极强，需要登录且需要滑块验证
 3. 备选方案: 用 Google site:douyin.com 搜索
@@ -887,7 +887,7 @@ source ~/tools/cloakbrowser/venv/bin/activate
 cd {dir}
 ```
 
-创建 cloak_stealth_suite/engines/weibo.py：
+创建 agent_search/engines/weibo.py：
 1. 使用微博搜索: s.weibo.com/weibo?q=xxx
 2. 微博需要 Cookie 才能搜索
 3. 备选方案: 用 Google site:weibo.com 搜索
@@ -911,7 +911,7 @@ source ~/tools/cloakbrowser/venv/bin/activate
 cd {dir}
 ```
 
-创建 cloak_stealth_suite/engines/toutiao.py：
+创建 agent_search/engines/toutiao.py：
 1. 使用今日头条搜索: so.toutiao.com/search?keyword=xxx
 2. 解析文章: title, url, source, abstract, comments_count
 3. 头条页面是动态加载
@@ -935,7 +935,7 @@ source ~/tools/cloakbrowser/venv/bin/activate
 cd {dir}
 ```
 
-创建 cloak_stealth_suite/engines/unsplash.py：
+创建 agent_search/engines/unsplash.py：
 1. 使用 Unsplash 搜索: unsplash.com/s/photos/xxx
 2. 解析图片: title, url, photographer, download_url, width, height
 3. Unsplash 也有免费 API (api.unsplash.com) 但需要 key
@@ -960,7 +960,7 @@ source ~/tools/cloakbrowser/venv/bin/activate
 cd {dir}
 ```
 
-创建 cloak_stealth_suite/engines/pixabay.py：
+创建 agent_search/engines/pixabay.py：
 1. 使用 Pixabay 搜索: pixabay.com/images/search/xxx
 2. Pixabay 有免费 API 但需要注册
 3. 优先用页面解析
@@ -985,7 +985,7 @@ source ~/tools/cloakbrowser/venv/bin/activate
 cd {dir}
 ```
 
-创建 cloak_stealth_suite/engines/pexels.py：
+创建 agent_search/engines/pexels.py：
 1. 使用 Pexels 搜索: pexels.com/search/xxx
 2. Pexels 有免费 API 但需要 key
 3. 优先用页面解析
@@ -1010,7 +1010,7 @@ source ~/tools/cloakbrowser/venv/bin/activate
 cd {dir}
 ```
 
-创建 cloak_stealth_suite/engines/xiaoyuzhou.py：
+创建 agent_search/engines/xiaoyuzhou.py：
 1. 使用小宇宙FM搜索: xiaoyuzhoufm.com/search?q=xxx
 2. 解析播客: title, url, podcast_name, duration, description
 3. 页面是 React 渲染，需要等待
@@ -1082,7 +1082,7 @@ def run_task(task_index):
         existing = read_progress()
         with open(progress_path, "w") as f:
             if not existing:
-                f.write("# Cloak Stealth Suite - Progress\n\n")
+                f.write("# AgentSearch - Progress\n\n")
             else:
                 f.write(existing)
             f.write(entry)
@@ -1106,7 +1106,7 @@ def main():
     os.makedirs(PROJECT_DIR, exist_ok=True)
 
     log.info("=" * 60)
-    log.info("Cloak Stealth Suite v2 - 增量监督启动")
+    log.info("AgentSearch v2 - 增量监督启动")
     log.info("=" * 60)
 
     # 清理残留 kiro 进程

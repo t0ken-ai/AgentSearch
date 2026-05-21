@@ -1,4 +1,4 @@
-"""Basic CloakBrowser smoke test for cloak_stealth_suite.core.
+"""Basic CloakBrowser smoke test for agent_search.core.
 
 Steps:
 1. Launch headless browser via core.launch().
@@ -19,7 +19,7 @@ if _PROJECT_ROOT not in sys.path:
     sys.path.insert(0, _PROJECT_ROOT)
 import traceback
 
-from cloak_stealth_suite import core
+from agent_search import core
 
 
 def _fetch_json(page, url: str) -> dict:

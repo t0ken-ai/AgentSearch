@@ -109,60 +109,60 @@ cd ~/projects/AgentSearch
 
 ### Recipe 1 — Generic web search
 ```bash
-python -m cloak_stealth_suite.cli search "what the user asked" --engine google --limit 5 --json
+agentsearch search "what the user asked" --engine google --limit 5 --json
 ```
 Returns JSON with `title`, `url`, `snippet` for each hit. Pick `duckduckgo` if Google
 shows a CAPTCHA.
 
 ### Recipe 2 — Code / docs lookup
 ```bash
-python -m cloak_stealth_suite.cli search "TypeError pandas dataframe groupby" --engine stackoverflow --limit 5 --json
-python -m cloak_stealth_suite.cli search "kubernetes ingress controller" --engine github --limit 5 --json
+agentsearch search "TypeError pandas dataframe groupby" --engine stackoverflow --limit 5 --json
+agentsearch search "kubernetes ingress controller" --engine github --limit 5 --json
 ```
 
 ### Recipe 3 — Latest research
 ```bash
-python -m cloak_stealth_suite.cli search "transformer scaling laws" --engine arxiv --limit 5 --json
-python -m cloak_stealth_suite.cli search "llama text-generation" --engine huggingface --limit 5 --json
+agentsearch search "transformer scaling laws" --engine arxiv --limit 5 --json
+agentsearch search "llama text-generation" --engine huggingface --limit 5 --json
 ```
 
 ### Recipe 4 — Discussion / opinions
 ```bash
-python -m cloak_stealth_suite.cli search "best linux laptop 2025" --engine reddit --limit 5 --json
-python -m cloak_stealth_suite.cli search "Python" --engine reddit_subreddit --limit 5 --json   # r/Python hot posts
-python -m cloak_stealth_suite.cli search "what is consciousness" --engine quora --limit 5 --json
+agentsearch search "best linux laptop 2025" --engine reddit --limit 5 --json
+agentsearch search "Python" --engine reddit_subreddit --limit 5 --json   # r/Python hot posts
+agentsearch search "what is consciousness" --engine quora --limit 5 --json
 ```
 
 ### Recipe 5 — Video / how-to
 ```bash
-python -m cloak_stealth_suite.cli search "react hooks tutorial" --engine youtube --limit 10 --json
-python -m cloak_stealth_suite.cli search "Python 入门" --engine bilibili --limit 5 --json
+agentsearch search "react hooks tutorial" --engine youtube --limit 10 --json
+agentsearch search "Python 入门" --engine bilibili --limit 5 --json
 ```
 
 ### Recipe 6 — Shopping
 ```bash
-python -m cloak_stealth_suite.cli search "mechanical keyboard hotswap" --engine amazon --limit 5 --json
-python -m cloak_stealth_suite.cli search "vintage hi-fi tube amp" --engine ebay --limit 5 --json
+agentsearch search "mechanical keyboard hotswap" --engine amazon --limit 5 --json
+agentsearch search "vintage hi-fi tube amp" --engine ebay --limit 5 --json
 ```
 
 ### Recipe 7 — Chinese platforms
 ```bash
-python -m cloak_stealth_suite.cli search "机器学习" --engine zhihu --limit 5 --json
-python -m cloak_stealth_suite.cli search "旅行攻略" --engine xiaohongshu --limit 5 --json
-python -m cloak_stealth_suite.cli search "美食" --engine douyin --limit 5 --json
+agentsearch search "机器学习" --engine zhihu --limit 5 --json
+agentsearch search "旅行攻略" --engine xiaohongshu --limit 5 --json
+agentsearch search "美食" --engine douyin --limit 5 --json
 ```
 
 ### Recipe 8 — Movie / book / podcast
 ```bash
-python -m cloak_stealth_suite.cli search "Inception" --engine imdb --limit 5 --json
-python -m cloak_stealth_suite.cli search "Dune" --engine goodreads --limit 5 --json
-python -m cloak_stealth_suite.cli search "Lex Fridman" --engine apple_podcasts --limit 5 --json
+agentsearch search "Inception" --engine imdb --limit 5 --json
+agentsearch search "Dune" --engine goodreads --limit 5 --json
+agentsearch search "Lex Fridman" --engine apple_podcasts --limit 5 --json
 ```
 
 ### Recipe 9 — Images
 ```bash
-python -m cloak_stealth_suite.cli search "mountain landscape" --engine unsplash --limit 5 --json
-python -m cloak_stealth_suite.cli search "interior design" --engine pinterest --limit 5 --json
+agentsearch search "mountain landscape" --engine unsplash --limit 5 --json
+agentsearch search "interior design" --engine pinterest --limit 5 --json
 ```
 
 ### Recipe 10 — Extract one URL's content (readability + Markdown)
@@ -170,8 +170,8 @@ python -m cloak_stealth_suite.cli search "interior design" --engine pinterest --
 # Returns clean Markdown body + structured metadata (title, author, date,
 # language, description, word_count, links, images). Auto-scrolls and
 # clicks "Load more" buttons to surface lazy content.
-python -m cloak_stealth_suite.cli extract "https://example.com/article" --json
-python -m cloak_stealth_suite.cli extract "https://reddit.com/r/foo/comments/x" --json --no-images
+agentsearch extract "https://example.com/article" --json
+agentsearch extract "https://reddit.com/r/foo/comments/x" --json --no-images
 ```
 
 JSON output schema:
@@ -191,7 +191,7 @@ JSON output schema:
 
 ### Recipe 11 — List every available engine
 ```bash
-python -m cloak_stealth_suite.cli list-engines
+agentsearch list-engines
 ```
 
 ### Recipe 12 — Multi-engine fan-out (parallel)
@@ -199,7 +199,7 @@ python -m cloak_stealth_suite.cli list-engines
 # Run 3-5 engines concurrently and merge results by URL with consensus
 # signal (URLs surfaced by multiple engines float to top). 2-3× faster
 # than sequential calls.
-python -m cloak_stealth_suite.cli search-many "open-source MCP web search" \
+agentsearch search-many "open-source MCP web search" \
     --engines duckduckgo,hackernews,github --limit 5 --merged --json
 ```
 
@@ -207,7 +207,7 @@ python -m cloak_stealth_suite.cli search-many "open-source MCP web search" \
 ```bash
 # Returns SERP hits AND the readability-extracted markdown body of the
 # top N results, so the agent doesn't need follow-up `extract` calls.
-python -m cloak_stealth_suite.cli search "transformer scaling laws" \
+agentsearch search "transformer scaling laws" \
     --engine arxiv --limit 5 --depth 3 --json
 # Top 3 results get body_markdown + body_word_count fields.
 ```
@@ -217,14 +217,14 @@ python -m cloak_stealth_suite.cli search "transformer scaling laws" \
 # Try primary engine; on empty / error, walk down a health-ranked chain
 # of general-search engines. Engine health is tracked across calls in
 # ~/.cache/agentsearch/health.json.
-python -m cloak_stealth_suite.cli search "X" --engine google --fallback --json
+agentsearch search "X" --engine google --fallback --json
 
 # Custom fallback chain
-python -m cloak_stealth_suite.cli search "X" --engine google \
+agentsearch search "X" --engine google \
     --fallback --fallback-chain duckduckgo,bing,startpage --json
 
 # Inspect the local health table
-python -m cloak_stealth_suite.cli status
+agentsearch status
 ```
 
 ---
@@ -239,7 +239,7 @@ calls (env: `AGENTSEARCH_RECYCLE_AFTER`).
 
 ```bash
 # Start the server (stdio JSON-RPC)
-python -m cloak_stealth_suite.mcp_server
+python -m agent_search.mcp_server
 ```
 
 Tool catalog:
@@ -257,7 +257,7 @@ Sample Claude Desktop config (`~/Library/Application Support/Claude/claude_deskt
   "mcpServers": {
     "agent-search": {
       "command": "/path/to/venv/bin/python",
-      "args": ["-m", "cloak_stealth_suite.mcp_server"]
+      "args": ["-m", "agent_search.mcp_server"]
     }
   }
 }
@@ -334,7 +334,7 @@ built-in `search-many` subcommand instead of calling N engines manually
 consensus signal:
 
 ```bash
-python -m cloak_stealth_suite.cli search-many "X" \
+agentsearch search-many "X" \
     --engines google,reddit,arxiv,hackernews --limit 5 --merged --json
 ```
 
@@ -345,7 +345,7 @@ returns one URL-deduped feed.
 Use the built-in `--fallback` flag instead of writing retry loops:
 
 ```bash
-python -m cloak_stealth_suite.cli search "X" --engine google --fallback --json
+agentsearch search "X" --engine google --fallback --json
 ```
 
 The fallback chain (default: `duckduckgo,google,bing,brave,startpage,
@@ -358,7 +358,7 @@ URLs come back with `body_markdown` already attached. Saves a
 follow-up `extract` round-trip per top hit:
 
 ```bash
-python -m cloak_stealth_suite.cli search "X" --engine reddit --limit 5 --depth 3 --json
+agentsearch search "X" --engine reddit --limit 5 --depth 3 --json
 ```
 
 ### Refining a query for a target site
@@ -374,8 +374,8 @@ caller doesn't need to do anything special — the adapter handles it.
 import sys
 sys.path.insert(0, "/Users/<user>/projects/AgentSearch")  # absolute path
 
-from cloak_stealth_suite.core import launch, BrowserConfig, new_page
-from cloak_stealth_suite.engines.duckduckgo import DuckDuckGoEngine
+from agent_search.core import launch, BrowserConfig, new_page
+from agent_search.engines.duckduckgo import DuckDuckGoEngine
 
 browser = launch(BrowserConfig(headless=True, humanize=True))
 try:
@@ -388,7 +388,7 @@ finally:
     browser.close()
 ```
 
-Every engine is in `cloak_stealth_suite.engines.<name>` and exposes a
+Every engine is in `agent_search.engines.<name>` and exposes a
 `<NameCamelCase>Engine` class that takes a `page` object and provides
 `search(query: str, limit: int) -> list[SearchResult]`.
 

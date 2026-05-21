@@ -30,16 +30,16 @@
 pip install cloakbrowser && pip install -e .
 
 # Search 71 sites
-python -m cloak_stealth_suite.cli search "what's new in transformers" --engine google --json
-python -m cloak_stealth_suite.cli search "react hooks tutorial"     --engine youtube --limit 10
-python -m cloak_stealth_suite.cli search "best laptop 2025"         --engine reddit
-python -m cloak_stealth_suite.cli search "transformer attention"    --engine arxiv
+agentsearch search "what's new in transformers" --engine google --json
+agentsearch search "react hooks tutorial"     --engine youtube --limit 10
+agentsearch search "best laptop 2025"         --engine reddit
+agentsearch search "transformer attention"    --engine arxiv
 
 # Extract a URL as clean Markdown (readability + auto-scroll for lazy content)
-python -m cloak_stealth_suite.cli extract "https://news.ycombinator.com/item?id=43936992" --json
+agentsearch extract "https://news.ycombinator.com/item?id=43936992" --json
 
 # Or run as an MCP server for Cursor / Cline / Claude Desktop / OpenClaw / Continue
-python -m cloak_stealth_suite.mcp_server
+python -m agent_search.mcp_server
 ```
 
 71 sites. One CLI. One MCP server. Runs entirely on your machine. **Bypasses Cloudflare, PerimeterX, Akamai, DataDome, and every fingerprint test we know of.**
@@ -95,7 +95,7 @@ The web search landscape for AI agents in 2026 is unpleasant. Hosted APIs are ge
 
 ## 🌍 The 71 Sites — Categorized
 
-> Every site is implemented as a self-contained adapter (`cloak_stealth_suite/engines/<name>.py`) with a runnable test (`tests/test_<name>.py`).
+> Every site is implemented as a self-contained adapter (`agent_search/engines/<name>.py`) with a runnable test (`tests/test_<name>.py`).
 
 <table>
 <tr>
@@ -175,38 +175,38 @@ pip install -e .
 
 ```bash
 # General web search
-python -m cloak_stealth_suite.cli search "latest AI news" --engine google
+agentsearch search "latest AI news" --engine google
 
 # Code lookup on StackOverflow
-python -m cloak_stealth_suite.cli search "TypeError pandas groupby" --engine stackoverflow
+agentsearch search "TypeError pandas groupby" --engine stackoverflow
 
 # Latest research papers
-python -m cloak_stealth_suite.cli search "transformer scaling laws" --engine arxiv
+agentsearch search "transformer scaling laws" --engine arxiv
 
 # Reddit discussion
-python -m cloak_stealth_suite.cli search "best linux laptop 2025" --engine reddit
+agentsearch search "best linux laptop 2025" --engine reddit
 
 # Video tutorials
-python -m cloak_stealth_suite.cli search "react hooks" --engine youtube --limit 10
+agentsearch search "react hooks" --engine youtube --limit 10
 
 # Shopping
-python -m cloak_stealth_suite.cli search "mechanical keyboard" --engine amazon
+agentsearch search "mechanical keyboard" --engine amazon
 
 # Chinese platform
-python -m cloak_stealth_suite.cli search "机器学习" --engine zhihu
+agentsearch search "机器学习" --engine zhihu
 
 # JSON output for piping into other tools
-python -m cloak_stealth_suite.cli search "open source" --engine github --json | jq .
+agentsearch search "open source" --engine github --json | jq .
 
 # List every available engine
-python -m cloak_stealth_suite.cli list-engines
+agentsearch list-engines
 ```
 
 ### 3. Or use it from Python
 
 ```python
-from cloak_stealth_suite.core import launch, BrowserConfig, new_page
-from cloak_stealth_suite.engines.google import GoogleEngine
+from agent_search.core import launch, BrowserConfig, new_page
+from agent_search.engines.google import GoogleEngine
 
 browser = launch(BrowserConfig(headless=True, humanize=True))
 try:
@@ -248,7 +248,7 @@ pip install -e ".[mcp]"      # adds the `mcp` Python SDK
   "mcpServers": {
     "agent-search": {
       "command": "/path/to/venv/bin/python",
-      "args": ["-m", "cloak_stealth_suite.mcp_server"]
+      "args": ["-m", "agent_search.mcp_server"]
     }
   }
 }
@@ -263,7 +263,7 @@ pip install -e ".[mcp]"      # adds the `mcp` Python SDK
   "mcpServers": {
     "agent-search": {
       "command": "/path/to/venv/bin/python",
-      "args": ["-m", "cloak_stealth_suite.mcp_server"]
+      "args": ["-m", "agent_search.mcp_server"]
     }
   }
 }
@@ -273,7 +273,7 @@ pip install -e ".[mcp]"      # adds the `mcp` Python SDK
 <details>
 <summary><b>Cline / Continue / Roo Code</b> · their MCP settings UI</summary>
 
-Same shape — point ``command`` at the venv's Python and ``args`` at ``-m cloak_stealth_suite.mcp_server``. The exact config file path varies; consult each client's docs.
+Same shape — point ``command`` at the venv's Python and ``args`` at ``-m agent_search.mcp_server``. The exact config file path varies; consult each client's docs.
 </details>
 
 <details>
@@ -306,7 +306,7 @@ The server keeps a single Chromium alive across calls and recycles it every 25 c
 ```bash
 # Get the title, author, date, and full article body — paginates lazy content,
 # strips ads/nav/chrome, returns Markdown ready for an LLM context.
-python -m cloak_stealth_suite.cli extract \
+agentsearch extract \
   "https://news.ycombinator.com/item?id=43936992" --json | jq .
 
 # Returns:
@@ -325,10 +325,10 @@ python -m cloak_stealth_suite.cli extract \
 # }
 
 # Skip auto-scroll for fast static pages
-python -m cloak_stealth_suite.cli extract "https://example.com/blog" --json --no-paginate
+agentsearch extract "https://example.com/blog" --json --no-paginate
 
 # Pretty-print as Markdown to stdout
-python -m cloak_stealth_suite.cli extract "https://example.com/blog" --format markdown
+agentsearch extract "https://example.com/blog" --format markdown
 ```
 </details>
 
@@ -337,10 +337,10 @@ python -m cloak_stealth_suite.cli extract "https://example.com/blog" --format ma
 
 ```bash
 # Fan out across complementary engines and merge
-python -m cloak_stealth_suite.cli search "X" --engine google     --limit 5 --json > /tmp/g.json
-python -m cloak_stealth_suite.cli search "X" --engine reddit     --limit 5 --json > /tmp/r.json
-python -m cloak_stealth_suite.cli search "X" --engine arxiv      --limit 3 --json > /tmp/a.json
-python -m cloak_stealth_suite.cli search "X" --engine hackernews --limit 5 --json > /tmp/h.json
+agentsearch search "X" --engine google     --limit 5 --json > /tmp/g.json
+agentsearch search "X" --engine reddit     --limit 5 --json > /tmp/r.json
+agentsearch search "X" --engine arxiv      --limit 3 --json > /tmp/a.json
+agentsearch search "X" --engine hackernews --limit 5 --json > /tmp/h.json
 ```
 </details>
 
@@ -348,8 +348,8 @@ python -m cloak_stealth_suite.cli search "X" --engine hackernews --limit 5 --jso
 <summary><b>🛒 Compare prices across e-commerce sites</b></summary>
 
 ```bash
-python -m cloak_stealth_suite.cli search "AirPods Pro 2" --engine amazon --json
-python -m cloak_stealth_suite.cli search "AirPods Pro 2" --engine ebay   --json
+agentsearch search "AirPods Pro 2" --engine amazon --json
+agentsearch search "AirPods Pro 2" --engine ebay   --json
 ```
 </details>
 
@@ -357,9 +357,9 @@ python -m cloak_stealth_suite.cli search "AirPods Pro 2" --engine ebay   --json
 <summary><b>🎬 Look up a movie + its book + its podcast</b></summary>
 
 ```bash
-python -m cloak_stealth_suite.cli search "Dune"        --engine imdb       --json
-python -m cloak_stealth_suite.cli search "Dune"        --engine goodreads  --json
-python -m cloak_stealth_suite.cli search "Frank Herbert" --engine apple_podcasts --json
+agentsearch search "Dune"        --engine imdb       --json
+agentsearch search "Dune"        --engine goodreads  --json
+agentsearch search "Frank Herbert" --engine apple_podcasts --json
 ```
 </details>
 
@@ -369,9 +369,9 @@ python -m cloak_stealth_suite.cli search "Frank Herbert" --engine apple_podcasts
 ```bash
 # These adapters ship with a transparent Google → Bing → DDG fallback for
 # their walled SERPs — no auth, no cookies, just works.
-python -m cloak_stealth_suite.cli search "旅行攻略" --engine xiaohongshu
-python -m cloak_stealth_suite.cli search "美食"     --engine douyin
-python -m cloak_stealth_suite.cli search "科技"     --engine weibo
+agentsearch search "旅行攻略" --engine xiaohongshu
+agentsearch search "美食"     --engine douyin
+agentsearch search "科技"     --engine weibo
 ```
 </details>
 
@@ -379,7 +379,7 @@ python -m cloak_stealth_suite.cli search "科技"     --engine weibo
 <summary><b>🤖 Find AI models / datasets on HuggingFace</b></summary>
 
 ```bash
-python -m cloak_stealth_suite.cli search "llama" --engine huggingface --json
+agentsearch search "llama" --engine huggingface --json
 # Returns model_id, author, downloads, likes, pipeline_tag, library, tags
 ```
 </details>
@@ -428,7 +428,7 @@ python -m cloak_stealth_suite.cli search "llama" --engine huggingface --json
 
 ```
 AgentSearch/
-├── cloak_stealth_suite/
+├── agent_search/
 │   ├── core.py               ← Browser launch & config
 │   ├── cli.py                ← Command-line interface
 │   ├── engines/              ← 60+ site adapters (one file per site)
@@ -503,7 +503,7 @@ By using this software you agree to bear full responsibility for your actions. S
 
 PRs welcome — especially for:
 
-- 🆕 New site adapters (browse `cloak_stealth_suite/engines/` for examples)
+- 🆕 New site adapters (browse `agent_search/engines/` for examples)
 - 🐛 Bug fixes for existing adapters
 - 🎯 Improved anti-detection techniques
 - 🌐 Documentation and translations

@@ -22,13 +22,13 @@ import sys
 import traceback
 
 # Make sure the AgentSearch project root wins over any older editable install
-# of `cloak_stealth_suite` that might be registered in site-packages.
+# of `agent_search` that might be registered in site-packages.
 _PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if _PROJECT_ROOT not in sys.path:
     sys.path.insert(0, _PROJECT_ROOT)
 
-from cloak_stealth_suite import core
-from cloak_stealth_suite.engines.devto import DevToEngine
+from agent_search import core
+from agent_search.engines.devto import DevToEngine
 
 
 QUERY = "rust async"

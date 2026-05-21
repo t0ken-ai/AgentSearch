@@ -1,4 +1,4 @@
-# Cloak Stealth Suite - 开发任务书
+# AgentSearch - 开发任务书
 
 ## 项目目标
 
@@ -50,7 +50,7 @@
 
 ## 开发要求
 
-1. 创建 Python 模块 `cloak_stealth_suite/`，包含：
+1. 创建 Python 模块 `agent_search/`，包含：
    - `core.py` - 核心浏览器启动和配置
    - `engines/` - 各搜索引擎适配器 (google.py, bing.py, reddit.py 等)
    - `stealth/` - 反检测增强模块

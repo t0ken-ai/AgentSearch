@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "agent-search"
-version = "0.1.0"
-description = "Anti-detection headless browser automation framework based on CloakBrowser"
+version = "1.0.0"
+description = "AgentSearch — local stealth-browser web search across 71 sites for AI agents. No API keys, no rate limits, no third-party servers."
 requires-python = ">=3.12"
 dependencies = [
     "cloakbrowser",
@@ -16,7 +16,7 @@ dependencies = [
 mcp = ["mcp>=1.0"]
 
 [project.scripts]
-cloak = "agent_search.cli:main"
+agentsearch = "agent_search.cli:main"
 
 [tool.setuptools.packages.find]
 include = ["agent_search*"]

@@ -55,11 +55,24 @@
 | # | Item | Status | Files | Notes |
 |---|---|---|---|---|
 | P1-5 | `search-many` parallel multi-engine fan-out | ✅ | `multi.py` (new), `cli.py` | One thread per engine, each owns its own browser. Returns `{per_engine, merged}`. URL-dedup with engine-consensus signal. **2.3× speedup measured** (3 engines: 5.0s parallel vs ~11.7s sequential). |
-| P1-6 | Engine health log + auto-fallback chain | 🚧 | `health.py` (new, written), `cli.py` (CLI wiring in progress) | JSON sliding-window log at `~/.cache/agentsearch/health.json`; `search_with_fallback(query, primary, chain)` re-orders fallback by health score. Module is done; finishing `--fallback` flag + `cloak status` command. |
+| P1-6 | Engine health log + auto-fallback chain | ✅ | `health.py` (new), `cli.py` | JSON sliding-window log at `~/.cache/agentsearch/health.json`; `search_with_fallback()` re-orders fallback by health score. CLI: `search --fallback`, `cloak status`. |
 | P1-7 | Extract: readability + paginate | ✅ | (folded into P0-2) | Done in `extract.py`. |
-| P1-8 | Deep-fetch for reddit / hackernews | ⏳ | `engines/reddit.py`, `engines/hackernews.py` | Add optional `with_full_text=True` so the engine fetches the top K comment threads / submission bodies in one call. Eliminates follow-up `extract` calls. |
-| (doc) | Update SKILL.md to match implementation | ⏳ | `skills/agent-search/SKILL.md` | Add new MCP / search-many / extract flags / fallback recipes. |
-| (test) | Run / fix existing stress tests | ⏳ | `tests/test_*_stress.py`, etc. | Make sure none of the changes regressed reddit / google / hackernews / extract. |
+| P1-8 | Deep-fetch for reddit / hackernews | ✅ | `cli.py`, `extract.py`, `mcp_server.py` | `search --depth N` returns top-N hits with `body_markdown` inline. |
+| (doc) | Update SKILL.md to match implementation | ✅ | `skills/agent-search/SKILL.md` | Recipe 12-14 + MCP Server Mode section. |
+| (test) | Run / fix existing stress tests | ✅ | (verified) | reddit / hackernews / duckduckgo / core tests all PASS. |
+
+### 🔧 P1.5 — strategic hot list (next, ordered by leverage)
+
+These came out of the 2026-05-21 follow-up sweep on "rigid demand × hard to scrape" sites
+and the realization that CloakBrowser already supports `launch_persistent_context()`.
+
+| # | Item | Status | Why now |
+|---|---|---|---|
+| P1.5-A | **CloakBrowser persistent profile + `cloak login` command** | ⏳ | Unlocks Twitter/X, LinkedIn profiles, Glassdoor, Discord, paywalled news, banking — every site where the structural blocker is "no cookie", not "stealth". Strictly better than chrome-devtools-mcp Path B because we keep stealth. Add `user_data_dir` to `BrowserConfig`; add `cloak login --site <name>` that opens headed CloakBrowser, waits for user login, persists to `~/.cache/agentsearch/profiles/<site>/`. Engines pick up the profile automatically when present. |
+| P1.5-B | **Brand rename: `cloak` → `agentsearch`** | ⏳ | Three-way naming mismatch hurts distribution: repo `AgentSearch`, package `agent_search`, CLI `cloak`. Plan: rename Python package `agent_search` → `agent_search`; add CLI entry point `agentsearch` (keep `cloak` as deprecated alias for one release); update README/SKILL.md; bump version to 1.0.0. ~30 min mechanical change once we agree. |
+| P1.5-C | **Google Maps adapter** | ⏳ | Top scrapers: gosom 4.1k⭐, omkarcloud 2.6k⭐. We have nothing. Agent's biggest local-search blind spot. Predicted hard but tractable with stealth + scroll handling. |
+| P1.5-D | **Jobs aggregator (`jobs` engine)** | ⏳ | Inspired by JobSpy 3.4k⭐ which bundles LinkedIn+Indeed+Glassdoor+ZipRecruiter+Google Jobs. We have `linkedin_jobs` and `indeed`. Add `glassdoor`, `ziprecruiter`, then a meta `jobs` engine that fans out to all four. |
+| P1.5-E | **Twitter/X structured improvements** | ⏳ | We have `twitter.py` but post-Musk lockdown 2023 it's the most-asked-for hard target (twikit 4.4k⭐, bisguzar 4k⭐). Once P1.5-A lands the user can log in once and we get the API tier they removed from public. |
 
 ### 💡 P2 — backlog
 
@@ -69,7 +82,10 @@
 | P2-2 | Nightly canary CI for all 71 engines | Auto-detect DOM drift; auto-file GitHub issue on regression |
 | P2-3 | More AI / dev high-traffic engines | `docs.python.org`, MDN, `crates.io`, HF Spaces, Kaggle, Papers with Code, Phind, Perplexity, OpenReview, Semantic Scholar |
 | P2-4 | Optional `serve --http` mode | For team agents running in cloud / docker without local Chromium; self-hosted only — never a managed SaaS |
-| P2-5 | Launch blog → Show HN → r/LocalLLaMA / r/ChatGPTCoding / r/openclaw | Direct line to the three HN viral pain-point posts (#43936992, #43921238, #46822822). Soft-recommend in firecrawl/exa MCP issue threads when users complain about cost. |
+| P2-5 | Travel sites: `booking` / `expedia` / `skyscanner` | DataDome heavy, CloakBrowser is one of few options that works. Big agent use-case (trip planning). |
+| P2-6 | Financial sites: `tradingview` / `yahoo_finance` | Once P1.5-A login lands, financial-data agents become tractable |
+| P2-7 | `chrome-devtools-mcp` interop (Path B, demoted) | Originally proposed as our login path; demoted because P1.5-A (persistent CloakBrowser profile) is strictly better (keeps stealth). Still useful for "use my CURRENT logged-in Chrome" zero-friction case — keep as opt-in alternative. |
+| P2-8 | Launch blog → Show HN → r/LocalLLaMA / r/ChatGPTCoding / r/openclaw | Direct line to the three HN viral pain-point posts (#43936992, #43921238, #46822822). Soft-recommend in firecrawl/exa MCP issue threads when users complain about cost. |
 
 ---
 
@@ -99,7 +115,7 @@ After P0-P1 ships:
 ## 5. Files modified so far
 
 ```
-cloak_stealth_suite/
+agent_search/
   cli.py                    ← extract subcommand rewritten, search-many added,
                               search adds --fallback (in progress)
   engines/reddit.py         ← _is_blocked() rewritten with multi-signal logic

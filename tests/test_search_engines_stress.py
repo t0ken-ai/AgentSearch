@@ -22,10 +22,10 @@ _PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if _PROJECT_ROOT not in sys.path:
     sys.path.insert(0, _PROJECT_ROOT)
 
-from cloak_stealth_suite import core
-from cloak_stealth_suite.engines.bing import BingEngine
-from cloak_stealth_suite.engines.duckduckgo import DuckDuckGoEngine
-from cloak_stealth_suite.engines.brave import BraveEngine
+from agent_search import core
+from agent_search.engines.bing import BingEngine
+from agent_search.engines.duckduckgo import DuckDuckGoEngine
+from agent_search.engines.brave import BraveEngine
 
 
 @dataclass
