@@ -227,6 +227,38 @@ agentsearch search "X" --engine google \
 agentsearch status
 ```
 
+### Recipe 15 — Log into a site once, reuse the session forever
+```bash
+# Open a headed CloakBrowser at the site's login page. Log in normally,
+# then come back to the terminal and press Enter. Cookies are saved to
+# ~/.cache/agentsearch/profiles/<site>/. Stealth (CloakBrowser's C++
+# patches) still applies — strictly better than driving your real Chrome.
+agentsearch login twitter
+agentsearch login linkedin
+agentsearch login glassdoor      # custom site → pass --url
+agentsearch login mysite --url https://mysite.com/auth/signin
+
+# Use the saved session in any follow-up search/extract:
+agentsearch search "from:elonmusk AI" --engine twitter --profile twitter --limit 10
+agentsearch extract "https://www.linkedin.com/in/<someone>/" --profile linkedin --json
+
+# Profiles are keyed by --profile name (defaults to the site arg). Re-running
+# `agentsearch login <site>` reuses the existing profile (just refreshes session).
+```
+
+When to use this:
+
+| Site | Why |
+|---|---|
+| `twitter` / `x` | API gone; logged-in user gets full feed access |
+| `linkedin` | Profile pages require login since 2024 |
+| `glassdoor` | Reviews / salaries paywalled to logged-in users |
+| `instagram` / `facebook` | Most content requires login |
+| `discord` | Channels need account |
+| `medium` | Paywalled articles unlock for members |
+| `quora` | Full thread for logged-in users |
+| Any private SaaS | Notion / Linear / JIRA / company wikis |
+
 ---
 
 ## 🔌 MCP Server Mode

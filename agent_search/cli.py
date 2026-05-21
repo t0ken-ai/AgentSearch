@@ -88,6 +88,111 @@ def _get_engine(name: str):
     return getattr(module, class_name)
 
 
+def _resolve_profile_dir(profile: str | None) -> str | None:
+    """Translate a --profile <name> CLI value into a concrete user_data_dir.
+
+    Returns None when no profile was requested, so callers fall back to
+    anonymous BrowserConfig. Logs a hint when the profile dir doesn't
+    exist yet (likely user forgot to run `agentsearch login` first).
+    """
+    if not profile:
+        return None
+    from .core import profile_path
+
+    try:
+        path = profile_path(profile)
+    except ValueError as e:
+        logging.warning("[cli] %s", e)
+        return None
+    if not path.exists():
+        logging.warning(
+            "[cli] profile %r does not exist yet (%s) — running anonymously. "
+            "Run `agentsearch login %s` first to create it.",
+            profile,
+            path,
+            profile,
+        )
+        return None
+    return str(path)
+
+
+def cmd_login(args):
+    """Open a headed CloakBrowser, let the user log into a site, persist cookies.
+
+    The browser stays open until the user closes the window OR presses Enter
+    in this terminal. Cookies / localStorage / IndexedDB are persisted to
+    ``~/.cache/agentsearch/profiles/<name>/`` and automatically picked up by
+    later ``search`` / ``extract`` / ``search-many`` calls that pass
+    ``--profile <name>``.
+    """
+    from .core import profile_path
+
+    # Default URL map for known login-walled sites. Add more here as we
+    # support more login flows; users can always pass --url to override.
+    DEFAULT_LOGIN_URLS = {
+        "twitter":     "https://x.com/login",
+        "x":           "https://x.com/login",
+        "linkedin":    "https://www.linkedin.com/login",
+        "instagram":   "https://www.instagram.com/accounts/login/",
+        "facebook":    "https://www.facebook.com/login/",
+        "reddit":      "https://www.reddit.com/login",
+        "glassdoor":   "https://www.glassdoor.com/profile/login_input.htm",
+        "discord":     "https://discord.com/login",
+        "github":      "https://github.com/login",
+        "medium":      "https://medium.com/m/signin",
+        "quora":       "https://www.quora.com/",
+        "weibo":       "https://passport.weibo.com/sso/signin",
+        "zhihu":       "https://www.zhihu.com/signin",
+        "bilibili":    "https://passport.bilibili.com/login",
+        "xiaohongshu": "https://www.xiaohongshu.com/explore",
+        "douyin":      "https://www.douyin.com/",
+    }
+
+    profile_name = args.profile or args.site
+    try:
+        prof_dir = profile_path(profile_name)
+    except ValueError as e:
+        print(f"Error: {e}", file=sys.stderr)
+        return 2
+    fresh = not prof_dir.exists()
+
+    url = args.url or DEFAULT_LOGIN_URLS.get(args.site.lower())
+    if not url:
+        print(
+            f"Error: no default login URL for site {args.site!r}. "
+            f"Pass --url <login_url>, e.g. --url https://example.com/login",
+            file=sys.stderr,
+        )
+        return 2
+
+    print(f"📂 Profile: {prof_dir}{' (new)' if fresh else ' (existing — re-using)'}")
+    print(f"🌐 Opening: {url}")
+    print(f"🪟 Window will stay open. Log in, then come back here and press Enter to save and close.")
+
+    cfg = BrowserConfig(headless=False, user_data_dir=str(prof_dir))
+    browser = launch(cfg)
+    try:
+        page = new_page(browser)
+        try:
+            page.goto(url, timeout=60000, wait_until="domcontentloaded")
+        except Exception as e:
+            log.warning("[login] navigation warning: %s", e)
+        try:
+            input(f"\nPress Enter when you've finished logging into {args.site}... ")
+        except (EOFError, KeyboardInterrupt):
+            print("\nCancelled — profile may be empty.", file=sys.stderr)
+            return 1
+    finally:
+        try:
+            browser.close()
+        except Exception:
+            pass
+
+    print(f"\n✅ Profile saved to {prof_dir}")
+    print(f"   Use it next time:  agentsearch search ... --profile {profile_name}")
+    return 0
+
+
 def cmd_search(args):
     # When --fallback is set, run through the health-aware fallback chain:
     # try the requested engine first, then bubble down to other healthy
@@ -132,7 +237,11 @@ def cmd_search(args):
     from .health import HealthLog
 
     health = HealthLog()
-    cfg = BrowserConfig(headless=not args.visible, proxy=args.proxy)
+    cfg = BrowserConfig(
+        headless=not args.visible,
+        proxy=args.proxy,
+        user_data_dir=_resolve_profile_dir(getattr(args, "profile", None)),
+    )
     browser = launch(cfg)
     started = time.time()
     results = []
@@ -216,7 +325,10 @@ def cmd_extract(args):
     """Extract main content from a URL with readability + auto-pagination."""
     from .extract import extract_page
 
-    cfg = BrowserConfig(headless=not args.visible)
+    cfg = BrowserConfig(
+        headless=not args.visible,
+        user_data_dir=_resolve_profile_dir(getattr(args, "profile", None)),
+    )
     browser = launch(cfg)
     try:
         page = new_page(browser)
@@ -444,6 +556,12 @@ def main():
         help="Deep-fetch the top N results (extract markdown body inline). "
              "0 = SERP only (default).",
     )
+    sp.add_argument(
+        "--profile",
+        default=None,
+        help="Use a persistent CloakBrowser profile by name (login state). "
+             "Run `agentsearch login <site>` first to populate it.",
+    )
 
     # extract
     ep = sub.add_parser("extract", help="Extract page content (readability + markdown)")
@@ -476,6 +594,11 @@ def main():
     ep.add_argument("--no-links", action="store_true", help="Skip <a> link collection")
     ep.add_argument("--no-images", action="store_true", help="Skip <img> collection")
     ep.add_argument("--visible", action="store_true")
+    ep.add_argument(
+        "--profile",
+        default=None,
+        help="Use a persistent CloakBrowser profile by name (login state).",
+    )
 
     # list-engines
     lp = sub.add_parser("list-engines", help="List available engines")
@@ -511,6 +634,26 @@ def main():
     stp = sub.add_parser("status", help="Show engine health stats from the local log")
     stp.add_argument("--json", action="store_true", help="Output as JSON")
 
+    # login
+    lgp = sub.add_parser(
+        "login",
+        help="Open a headed CloakBrowser to log into a site; cookies persist for later use",
+    )
+    lgp.add_argument(
+        "site",
+        help="Site name (e.g. twitter, linkedin, glassdoor, instagram, discord, github, ...)",
+    )
+    lgp.add_argument(
+        "--profile",
+        default=None,
+        help="Profile name (defaults to the site name)",
+    )
+    lgp.add_argument(
+        "--url",
+        default=None,
+        help="Override the login URL (default: a known login URL for common sites)",
+    )
+
     args = parser.parse_args()
     if not args.command:
         parser.print_help()
@@ -526,6 +669,8 @@ def main():
         cmd_list_engines(args)
     elif args.command == "status":
         sys.exit(cmd_status(args))
+    elif args.command == "login":
+        sys.exit(cmd_login(args))
     elif args.command == "test":
         sys.exit(cmd_test(args))
 

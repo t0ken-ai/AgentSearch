@@ -301,6 +301,37 @@ The server keeps a single Chromium alive across calls and recycles it every 25 c
 ## 🍳 Cookbook — Common Recipes
 
 <details>
+<summary><b>🔐 Log into a site once, reuse the session forever</b></summary>
+
+Sites like Twitter/X, LinkedIn, Glassdoor, Discord, and Instagram return
+nothing useful when accessed anonymously. Run `agentsearch login` once,
+log in via the headed CloakBrowser window, and every subsequent search
+or extract picks up the session — *without* losing stealth (the
+CloakBrowser C++ patches still apply, unlike Chrome-CDP-based tools
+that use the user's vanilla Chrome).
+
+```bash
+# Open a headed window, log in interactively, press Enter to save:
+agentsearch login twitter
+agentsearch login linkedin
+agentsearch login glassdoor
+
+# Use the persisted profile in any follow-up call:
+agentsearch search "from:elonmusk AI" --engine twitter --profile twitter --limit 10
+agentsearch extract "https://www.linkedin.com/in/<handle>/" --profile linkedin --json
+
+# Custom site? Override the login URL:
+agentsearch login mysite --url https://mysite.com/auth/signin
+```
+
+Profiles live in `~/.cache/agentsearch/profiles/<name>/` (override with
+`AGENTSEARCH_PROFILES_DIR`). `--profile <name>` defaults to the site's
+own name when you ran `login`. Profiles preserve cookies, localStorage,
+IndexedDB, and service workers — the same shape as a real Chrome
+profile.
+</details>
+
+<details>
 <summary><b>📰 Extract a URL as clean Markdown (readability + auto-pagination)</b></summary>
 
 ```bash
