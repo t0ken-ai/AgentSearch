@@ -1,0 +1,127 @@
+[
+    {
+        "id": "AU",
+        "label": "AU",
+        "value": "Australia"
+    },
+    {
+        "id": "BR",
+        "label": "BR",
+        "value": "Brazil"
+    },
+    {
+        "id": "CA",
+        "label": "CA",
+        "value": "Canada"
+    },
+    {
+        "id": "EG",
+        "label": "EG",
+        "value": "Egypt"
+    },
+    {
+        "id": "FR",
+        "label": "FR",
+        "value": "France"
+    },
+    {
+        "id": "DE",
+        "label": "DE",
+        "value": "Germany"
+    },
+    {
+        "id": "ID",
+        "label": "ID",
+        "value": "Indonesia"
+    },
+    {
+        "id": "IT",
+        "label": "IT",
+        "value": "Italy"
+    },
+    {
+        "id": "JP",
+        "label": "JP",
+        "value": "Japan"
+    },
+    {
+        "id": "MY",
+        "label": "MY",
+        "value": "Malaysia"
+    },
+    {
+        "id": "MX",
+        "label": "MX",
+        "value": "Mexico"
+    },
+    {
+        "id": "PH",
+        "label": "PH",
+        "value": "Philippines"
+    },
+    {
+        "id": "PL",
+        "label": "PL",
+        "value": "Poland"
+    },
+    {
+        "id": "RU",
+        "label": "RU",
+        "value": "Russia"
+    },
+    {
+        "id": "SA",
+        "label": "SA",
+        "value": "Saudi Arabia"
+    },
+    {
+        "id": "SG",
+        "label": "SG",
+        "value": "Singapore"
+    },
+    {
+        "id": "KR",
+        "label": "KR",
+        "value": "South Korea"
+    },
+    {
+        "id": "ES",
+        "label": "ES",
+        "value": "Spain"
+    },
+    {
+        "id": "SE",
+        "label": "SE",
+        "value": "Sweden"
+    },
+    {
+        "id": "TH",
+        "label": "TH",
+        "value": "Thailand"
+    },
+    {
+        "id": "TR",
+        "label": "TR",
+        "value": "Turkey"
+    },
+    {
+        "id": "AE",
+        "label": "AE",
+        "value": "United Arab Emirates"
+    },
+    {
+        "id": "GB",
+        "label": "GB",
+        "value": "United Kingdom"
+    },
+    {
+        "id": "US",
+        "label": "US",
+        "value": "United States"
+    },
+    {
+        "id": "VN",
+        "label": "VN",
+        "value": "Vietnam"
+    }
+]

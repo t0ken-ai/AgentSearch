@@ -1,0 +1,46 @@
+[
+    {
+        "id": "post",
+        "value": "Popularity"
+    },
+    {
+        "id": "post_change",
+        "value": "Popularity change"
+    },
+    {
+        "id": "ctr",
+        "value": "CTR"
+    },
+    {
+        "id": "cvr",
+        "value": "CVR"
+    },
+    {
+        "id": "cpa",
+        "value": "CPA"
+    },
+    {
+        "id": "cost",
+        "value": "Cost"
+    },
+    {
+        "id": "impression",
+        "value": "Impressions"
+    },
+    {
+        "id": "play_six_rate",
+        "value": "6s View Rate"
+    },
+    {
+        "id": "like",
+        "value": "Likes"
+    },
+    {
+        "id": "share",
+        "value": "Shares"
+    },
+    {
+        "id": "comment",
+        "value": "Comments"
+    }
+]

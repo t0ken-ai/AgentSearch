@@ -1,0 +1,37 @@
+[
+    {
+        "id": 1,
+        "value": "Traffic",
+        "label": "campaign_objective_traffic"
+    },
+    {
+        "id": 2,
+        "value": "App Installs",
+        "label": "campaign_objective_app_install"
+    },
+    {
+        "id": 3,
+        "value": "Conversions",
+        "label": "campaign_objective_conversion"
+    },
+    {
+        "id": 4,
+        "value": "Video Views",
+        "label": "campaign_objective_video_view"
+    },
+    {
+        "id": 5,
+        "value": "Reach",
+        "label": "campaign_objective_reach"
+    },
+    {
+        "id": 8,
+        "value": "Lead Generation",
+        "label": "campaign_objective_lead_generation"
+    },
+    {
+        "id": 14,
+        "value": "Product sales",
+        "label": "campaign_objective_product_sales"
+    }
+]

@@ -1,0 +1,22 @@
+[
+    {
+        "id": "retain_ctr",
+        "value": "CTR"
+    },
+    {
+        "id": "retain_cvr",
+        "value": "CVR"
+    },
+    {
+        "id": "click_cnt",
+        "value": "Clicks"
+    },
+    {
+        "id": "convert_cnt",
+        "value": "Conversion"
+    },
+    {
+        "id": "play_retain_cnt",
+        "value": "Remain"
+    }
+]

@@ -1,0 +1,22 @@
+[
+    {
+        "id": "ctr_percentile",
+        "value": "CTR"
+    },
+    {
+        "id": "time_attr_conversion_rate_percentile",
+        "value": "CVR"
+    },
+    {
+        "id": "click_cnt_percentile",
+        "value": "Clicks"
+    },
+    {
+        "id": "time_attr_convert_cnt_percentile",
+        "value": "Conversion"
+    },
+    {
+        "id": "show_cnt_percentile",
+        "value": "Remain"
+    }
+]

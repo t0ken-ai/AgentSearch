@@ -1,0 +1,12 @@
+[
+    {
+        "id": 7,
+        "label": "seven_day",
+        "value": "Last 7 days"
+    },
+    {
+        "id": 30,
+        "label": "thirty_day",
+        "value": "Last 30 days"
+    }
+]

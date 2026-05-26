@@ -1,0 +1,17 @@
+[
+    {
+        "id": 7,
+        "value": "Last 7 days",
+        "label": "seven_day"
+    },
+    {
+        "id": 30,
+        "value": "Last 30 days",
+        "label": "thirty_day"
+    },
+    {
+        "id": 180,
+        "value": "Last 180 days",
+        "label": "half_year"
+    }
+]

@@ -1,0 +1,17 @@
+[
+    {
+        "id": "follower",
+        "value": "creator_follower",
+        "label": "creator_follower"
+    },
+    {
+        "id": "engagement",
+        "value": "creator_engagement",
+        "label": "creator_engagement"
+    },
+    {
+        "id": "avg_views",
+        "value": "creator_avg_views",
+        "label": "creator_avg_views"
+    }
+]

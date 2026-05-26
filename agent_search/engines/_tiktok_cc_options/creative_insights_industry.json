@@ -1,0 +1,82 @@
+[
+    {
+        "id": 25000000000,
+        "value": "Games",
+        "label": "label_25000000000"
+    },
+    {
+        "id": 25307000000,
+        "value": "Shooting",
+        "label": "label_25307000000"
+    },
+    {
+        "id": 25303000000,
+        "value": "Match",
+        "label": "label_25303000000"
+    },
+    {
+        "id": 25310000000,
+        "value": "Strategy",
+        "label": "label_25310000000"
+    },
+    {
+        "id": 25304000000,
+        "value": "Puzzle",
+        "label": "label_25304000000"
+    },
+    {
+        "id": 25313000000,
+        "value": "Kids",
+        "label": "label_25313000000"
+    },
+    {
+        "id": 25305000000,
+        "value": "Racing",
+        "label": "label_25305000000"
+    },
+    {
+        "id": 25999000000,
+        "value": "Other",
+        "label": "label_25999000000"
+    },
+    {
+        "id": 25312000000,
+        "value": "Tabletop",
+        "label": "label_25312000000"
+    },
+    {
+        "id": 25306000000,
+        "value": "RPG",
+        "label": "label_25306000000"
+    },
+    {
+        "id": 25301000000,
+        "value": "Action",
+        "label": "label_25301000000"
+    },
+    {
+        "id": 25311000000,
+        "value": "Party",
+        "label": "label_25311000000"
+    },
+    {
+        "id": 25309000000,
+        "value": "Sports",
+        "label": "label_25309000000"
+    },
+    {
+        "id": 25302000000,
+        "value": "Casino",
+        "label": "label_25302000000"
+    },
+    {
+        "id": 25300000000,
+        "value": "Hyper-Casual",
+        "label": "label_25300000000"
+    },
+    {
+        "id": 25308000000,
+        "value": "Simulation",
+        "label": "label_25308000000"
+    }
+]

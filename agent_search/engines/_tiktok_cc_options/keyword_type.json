@@ -1,0 +1,32 @@
+[
+    {
+        "id": 1,
+        "value": "script_keyword_type_selling_point",
+        "label": "script_keyword_type_selling_point"
+    },
+    {
+        "id": 2,
+        "value": "script_keyword_type_pain_point",
+        "label": "script_keyword_type_pain_point"
+    },
+    {
+        "id": 6,
+        "value": "script_keyword_type_product",
+        "label": "script_keyword_type_product"
+    },
+    {
+        "id": 3,
+        "value": "script_keyword_type_target_audience",
+        "label": "script_keyword_type_target_audience"
+    },
+    {
+        "id": 4,
+        "value": "script_keyword_type_cta",
+        "label": "script_keyword_type_cta"
+    },
+    {
+        "id": 5,
+        "value": "script_keyword_type_others",
+        "label": "script_keyword_type_others"
+    }
+]

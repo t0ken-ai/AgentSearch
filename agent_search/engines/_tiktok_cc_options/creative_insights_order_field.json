@@ -1,0 +1,18 @@
+[
+    {
+        "id": "ctr",
+        "value": "CTR"
+    },
+    {
+        "id": "play_over_rate",
+        "value": "View-through rate"
+    },
+    {
+        "id": "high_spending_rate",
+        "value": "Ad spend"
+    },
+    {
+        "id": "high_spending_rate_change",
+        "value": "Ad spend change"
+    }
+]

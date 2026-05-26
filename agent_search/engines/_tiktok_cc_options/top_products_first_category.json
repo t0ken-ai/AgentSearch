@@ -1,0 +1,142 @@
+[
+    {
+        "id": 605196,
+        "value": "Automotive & Motorbike",
+        "label": "category_605196"
+    },
+    {
+        "id": 602284,
+        "value": "Baby & Maternity",
+        "label": "category_602284"
+    },
+    {
+        "id": 601450,
+        "value": "Beauty & Personal Care",
+        "label": "category_601450"
+    },
+    {
+        "id": 801928,
+        "value": "Books, Magazines & Audio",
+        "label": "category_801928"
+    },
+    {
+        "id": 951432,
+        "value": "Collectibles",
+        "label": "category_951432"
+    },
+    {
+        "id": 601755,
+        "value": "Computers & Office Equipment",
+        "label": "category_601755"
+    },
+    {
+        "id": 605248,
+        "value": "Fashion Accessories",
+        "label": "category_605248"
+    },
+    {
+        "id": 700437,
+        "value": "Food & Beverages",
+        "label": "category_700437"
+    },
+    {
+        "id": 604453,
+        "value": "Furniture",
+        "label": "category_604453"
+    },
+    {
+        "id": 700645,
+        "value": "Health",
+        "label": "category_700645"
+    },
+    {
+        "id": 604968,
+        "value": "Home Improvement",
+        "label": "category_604968"
+    },
+    {
+        "id": 600001,
+        "value": "Home Supplies",
+        "label": "category_600001"
+    },
+    {
+        "id": 600942,
+        "value": "Household Appliances",
+        "label": "category_600942"
+    },
+    {
+        "id": 953224,
+        "value": "Jewellery, Accessories & Derivatives",
+        "label": "category_953224"
+    },
+    {
+        "id": 802184,
+        "value": "Kids' Fashion",
+        "label": "category_802184"
+    },
+    {
+        "id": 600024,
+        "value": "Kitchenware",
+        "label": "category_600024"
+    },
+    {
+        "id": 824584,
+        "value": "Luggage & Bags",
+        "label": "category_824584"
+    },
+    {
+        "id": 824328,
+        "value": "Menswear & Men's Underwear",
+        "label": "category_824328"
+    },
+    {
+        "id": 601303,
+        "value": "Muslim Fashion",
+        "label": "category_601303"
+    },
+    {
+        "id": 602118,
+        "value": "Pet Supplies",
+        "label": "category_602118"
+    },
+    {
+        "id": 601739,
+        "value": "Phones & Electronics",
+        "label": "category_601739"
+    },
+    {
+        "id": 601352,
+        "value": "Shoes",
+        "label": "category_601352"
+    },
+    {
+        "id": 603014,
+        "value": "Sports & Outdoor",
+        "label": "category_603014"
+    },
+    {
+        "id": 600154,
+        "value": "Textiles & Soft Furnishings",
+        "label": "category_600154"
+    },
+    {
+        "id": 604579,
+        "value": "Tools & Hardware",
+        "label": "category_604579"
+    },
+    {
+        "id": 604206,
+        "value": "Toys & Hobbies",
+        "label": "category_604206"
+    },
+    {
+        "id": 834312,
+        "value": "Virtual Products",
+        "label": "category_834312"
+    },
+    {
+        "id": 601152,
+        "value": "Womenswear & Women's Underwear",
+        "label": "category_601152"
+    }
+]

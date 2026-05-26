@@ -1,0 +1,82 @@
+[
+    {
+        "id": "en",
+        "label": "language_en",
+        "value": "language_en"
+    },
+    {
+        "id": "es",
+        "label": "language_es",
+        "value": "language_es"
+    },
+    {
+        "id": "ar",
+        "label": "language_ar",
+        "value": "language_ar"
+    },
+    {
+        "id": "vi",
+        "label": "language_vi",
+        "value": "language_vi"
+    },
+    {
+        "id": "th",
+        "label": "language_th",
+        "value": "language_th"
+    },
+    {
+        "id": "de",
+        "label": "language_de",
+        "value": "language_de"
+    },
+    {
+        "id": "id",
+        "label": "language_id",
+        "value": "language_id"
+    },
+    {
+        "id": "pt",
+        "label": "language_pt",
+        "value": "language_pt"
+    },
+    {
+        "id": "fr",
+        "label": "language_fr",
+        "value": "language_fr"
+    },
+    {
+        "id": "ms",
+        "label": "language_ms",
+        "value": "language_ms"
+    },
+    {
+        "id": "nl",
+        "label": "language_nl",
+        "value": "language_nl"
+    },
+    {
+        "id": "ja",
+        "label": "language_ja",
+        "value": "language_ja"
+    },
+    {
+        "id": "it",
+        "label": "language_it",
+        "value": "language_it"
+    },
+    {
+        "id": "ro",
+        "label": "language_ro",
+        "value": "language_ro"
+    },
+    {
+        "id": "zh-Hant",
+        "label": "language_zh-Hant",
+        "value": "language_zh-Hant"
+    },
+    {
+        "id": "ko",
+        "label": "language_ko",
+        "value": "language_ko"
+    }
+]

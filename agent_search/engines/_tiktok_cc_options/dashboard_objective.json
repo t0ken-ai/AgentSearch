@@ -1,0 +1,44 @@
+[
+    {
+        "has_conversion": false,
+        "id": 1,
+        "label": "campaign_objective_traffic",
+        "value": "Traffic"
+    },
+    {
+        "has_conversion": true,
+        "id": 2,
+        "label": "campaign_objective_app_install",
+        "value": "App Installs"
+    },
+    {
+        "has_conversion": true,
+        "id": 3,
+        "label": "campaign_objective_conversion",
+        "value": "Conversions"
+    },
+    {
+        "has_conversion": false,
+        "id": 4,
+        "label": "campaign_objective_video_view",
+        "value": "Video Views"
+    },
+    {
+        "has_conversion": false,
+        "id": 5,
+        "label": "campaign_objective_reach",
+        "value": "Reach"
+    },
+    {
+        "has_conversion": true,
+        "id": 8,
+        "label": "campaign_objective_lead_generation",
+        "value": "Lead Generation"
+    },
+    {
+        "has_conversion": false,
+        "id": 15,
+        "label": "campaign_objective_product_sales",
+        "value": "Product sales"
+    }
+]
