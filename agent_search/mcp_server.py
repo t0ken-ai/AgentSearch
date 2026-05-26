@@ -310,6 +310,17 @@ async def list_engines() -> dict[str, Any]:
         "archive": ["archive_org", "torrent_1337x"],
         "images": ["unsplash", "pixabay", "pexels", "pinterest"],
         "long_form": ["medium"],
+        # Ad creative intelligence — competitive research across the four
+        # major public ad libraries. Each returns image / video URLs +
+        # first/last seen + copy so a marketing agent can build evergreen
+        # swipe files. See docs/ADS.md for full mode/parameter reference.
+        "ads": [
+            "meta_ad_library", "fb_ads", "meta_ads",
+            "instagram_ad_library", "ig_ads", "instagram_ads",
+            "tiktok_creative_center", "tt_ads", "ttcc",
+            "tiktok_ad_library", "tiktok_ads",
+            "google_ad_transparency", "g_ads",
+        ],
     }
     return {
         "count": len(set(reg.values())),

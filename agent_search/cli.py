@@ -31,6 +31,8 @@ _ALIASES: dict[str, tuple[str, str]] = {
     "meta_ads":    ("meta_ad_library",   "MetaAdLibraryEngine"),
     "g_ads":       ("google_ad_transparency", "GoogleAdTransparencyEngine"),
     "tiktok_ads":  ("tiktok_ad_library", "TikTokAdLibraryEngine"),
+    "ig_ads":      ("instagram_ad_library", "InstagramAdLibraryEngine"),
+    "instagram_ads": ("instagram_ad_library", "InstagramAdLibraryEngine"),
 }
 
 
@@ -505,10 +507,15 @@ _BUNDLES: dict[str, list[str]] = {
     # Skyscanner left out for now: free-text queries don't map cleanly
     # to its structured origin/destination/dates input.
     "travel": ["booking", "expedia"],
-    # Ad intelligence — competitive creative research across the three
+    # Ad intelligence — competitive creative research across the four
     # major public ad libraries. Returns image / video URLs + first/last
     # seen so a marketing agent can build evergreen swipe files.
-    "ads": ["meta_ad_library", "google_ad_transparency", "tiktok_creative_center"],
+    "ads": ["meta_ad_library", "instagram_ad_library",
+            "google_ad_transparency", "tiktok_creative_center"],
+    # Social-only ad creatives (skip Google text/shopping which has
+    # very different format expectations).
+    "social_ads": ["meta_ad_library", "instagram_ad_library",
+                   "tiktok_creative_center"],
 }
 
 
