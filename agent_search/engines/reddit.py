@@ -167,6 +167,64 @@ class RedditEngine(BaseEngine):
         # Diagnostics for callers / tests.
         self.last_status: dict = {}
 
+    # ------------------------------------------------------------------ public API
+
+    def search(  # type: ignore[override]
+        self,
+        query: str,
+        limit: int = 10,
+        *,
+        mode: str = "search",
+        comment_limit: int = 20,
+    ) -> list[SearchResult]:
+        """Run a Reddit query.
+
+        Modes:
+          * ``"search"`` (default): legacy ``old.reddit.com/search``
+            keyword search via the BaseEngine retry loop.
+          * ``"post"``: treat ``query`` as a post URL (any of
+            ``reddit.com/r/<sub>/comments/<id>/<slug>``,
+            ``reddit.com/comments/<id>``, ``redd.it/<id>``) or a bare
+            base36 post id; fetch ``/comments/<id>.json`` (Reddit's
+            official public JSON, no API key) and return one
+            SearchResult for the post + ``comment_limit`` results for
+            the top comments. Extracts media URLs (i.redd.it / v.redd.it
+            fallback_url / gallery_data) the same way PRAW does.
+        """
+        self.last_status = {"mode_requested": mode}
+        m = (mode or "search").lower()
+        if m == "post":
+            return self._mode_post(query, comment_limit)
+        return super().search(query, limit)
+
+    def fetch_post(self, url_or_id: str, *, comment_limit: int = 20) -> dict:
+        """Fetch a single Reddit post + its top comments via ``.json``.
+
+        ``url_or_id`` may be a full reddit URL, a ``redd.it/<id>`` short URL,
+        or a bare base36 post id. Returns ``{}`` on failure. Otherwise:
+
+          {
+              "id": <base36>,
+              "url": <permalink>,
+              "subreddit": "r/<sub>",
+              "title": ..., "author": ..., "score": int, "num_comments": int,
+              "created_utc": float, "selftext": str, "is_self": bool,
+              "is_video": bool, "is_gallery": bool, "over_18": bool,
+              "link_url": str (external when not self),
+              "image_urls": [str, ...],
+              "video_url": str,           # mp4 for v.redd.it
+              "gallery": [{"url": str, "media_id": str}, ...],
+              "comments": [
+                  {"id", "author", "score", "body", "created_utc", "depth",
+                   "permalink", "replies": [...]}, ...
+              ],
+          }
+        """
+        post_id = self._normalise_post_id(url_or_id)
+        if not post_id:
+            return {}
+        return self._fetch_post_json(post_id, comment_limit=comment_limit)
+
     # ------------------------------------------------------------------ search
 
     def _do_search(self, query: str, limit: int) -> list[SearchResult]:
@@ -498,3 +556,360 @@ class RedditEngine(BaseEngine):
             if len(results) >= limit:
                 break
         return results
+
+
+    # ============================================================
+    # Post-detail mode (mode="post") — uses the .json public endpoint
+    # ============================================================
+
+    POST_JSON_URL = "https://www.reddit.com/comments/{post_id}.json?limit={limit}&raw_json=1"
+    POST_JSON_URL_OLD = "https://old.reddit.com/comments/{post_id}.json?limit={limit}&raw_json=1"
+
+    def _mode_post(
+        self, query: str, comment_limit: int,
+    ) -> list[SearchResult]:
+        post_id = self._normalise_post_id(query)
+        if not post_id:
+            self.last_status["error"] = "invalid_post_id"
+            return []
+        data = self._fetch_post_json(post_id, comment_limit=comment_limit)
+        if not data:
+            return []
+
+        out: list[SearchResult] = []
+
+        # 1) The post itself, with media URLs surfaced.
+        head = []
+        if data.get("subreddit"):
+            head.append(data["subreddit"])
+        if data.get("author"):
+            head.append(f"u/{data['author']}")
+        if data.get("score") is not None:
+            head.append(f"{data['score']} pts")
+        if data.get("num_comments") is not None:
+            head.append(f"{data['num_comments']} comments")
+        if data.get("video_url"):
+            head.append("video")
+        elif data.get("image_urls"):
+            head.append(f"{len(data['image_urls'])} image{'s' if len(data['image_urls']) > 1 else ''}")
+        snippet = " · ".join(head)
+        if data.get("selftext"):
+            snippet = snippet + " — " + data["selftext"][:240]
+        elif data.get("link_url") and not data.get("is_self"):
+            snippet = snippet + " — " + data["link_url"][:200]
+
+        post_result = SearchResult(
+            title=(data.get("title") or "Reddit post")[:200],
+            url=data.get("url") or "",
+            snippet=snippet[:400],
+            score=data.get("score"),
+        )
+        post_result.post_id = data.get("id")              # type: ignore[attr-defined]
+        post_result.subreddit = data.get("subreddit", "") # type: ignore[attr-defined]
+        post_result.author = data.get("author", "")       # type: ignore[attr-defined]
+        post_result.score_num = data.get("score")         # type: ignore[attr-defined]
+        post_result.num_comments = data.get("num_comments")  # type: ignore[attr-defined]
+        post_result.created_utc = data.get("created_utc") # type: ignore[attr-defined]
+        post_result.selftext = data.get("selftext", "")   # type: ignore[attr-defined]
+        post_result.is_self = data.get("is_self", False)  # type: ignore[attr-defined]
+        post_result.is_video = data.get("is_video", False)  # type: ignore[attr-defined]
+        post_result.is_gallery = data.get("is_gallery", False)  # type: ignore[attr-defined]
+        post_result.over_18 = data.get("over_18", False)  # type: ignore[attr-defined]
+        post_result.link_url = data.get("link_url", "")   # type: ignore[attr-defined]
+        post_result.image_urls = data.get("image_urls") or []  # type: ignore[attr-defined]
+        post_result.video_url = data.get("video_url", "") # type: ignore[attr-defined]
+        post_result.gallery = data.get("gallery") or []   # type: ignore[attr-defined]
+        post_result.kind = "post"                         # type: ignore[attr-defined]
+        out.append(post_result)
+
+        # 2) Top comments as separate result entries (capped by comment_limit).
+        for c in (data.get("comments") or [])[:comment_limit]:
+            head = []
+            if c.get("author"):
+                head.append(f"u/{c['author']}")
+            if c.get("score") is not None:
+                head.append(f"{c['score']} pts")
+            if c.get("depth") is not None:
+                head.append(f"depth={c['depth']}")
+            cmnt_snippet = " · ".join(head)
+            body = (c.get("body") or "").strip()
+            if body:
+                cmnt_snippet = cmnt_snippet + " — " + body[:280]
+
+            r = SearchResult(
+                title=(body[:180] if body else "[deleted comment]"),
+                url=c.get("permalink") or "",
+                snippet=cmnt_snippet[:400],
+                score=c.get("score"),
+            )
+            r.post_id = c.get("id")                       # type: ignore[attr-defined]
+            r.subreddit = data.get("subreddit", "")       # type: ignore[attr-defined]
+            r.author = c.get("author", "")                # type: ignore[attr-defined]
+            r.score_num = c.get("score")                  # type: ignore[attr-defined]
+            r.body = body                                 # type: ignore[attr-defined]
+            r.created_utc = c.get("created_utc")          # type: ignore[attr-defined]
+            r.depth = c.get("depth")                      # type: ignore[attr-defined]
+            r.kind = "comment"                            # type: ignore[attr-defined]
+            out.append(r)
+        self.last_status["mode"] = "post"
+        return out
+
+    def _normalise_post_id(self, query: str) -> str:
+        """Accept a full reddit URL, ``redd.it/<id>``, or bare ``<id>``."""
+        if not query:
+            return ""
+        q = query.strip()
+        # bare base36 id (5–8 chars typically)
+        if re.fullmatch(r"[a-z0-9]{5,10}", q):
+            return q
+        # redd.it short URL
+        m = re.match(r"https?://(?:www\.)?redd\.it/([a-z0-9]+)", q, re.I)
+        if m:
+            return m.group(1)
+        # /comments/<id>/<slug> in any reddit host
+        m = re.search(
+            r"reddit\.com/(?:r/[^/]+/)?comments/([a-z0-9]+)",
+            q, re.I,
+        )
+        if m:
+            return m.group(1)
+        return ""
+
+    def _fetch_post_json(
+        self, post_id: str, *, comment_limit: int,
+    ) -> dict:
+        """Hit ``/comments/<id>.json`` (no API key needed) and parse.
+
+        Tries ``www.reddit.com`` first, falls back to ``old.reddit.com``
+        if the canonical host throttles. Uses the same warm-up trick as
+        the search path (visit www.reddit.com first so js_challenge
+        cookies land) — but only when the engine has been live for less
+        than a single request, since we don't want to redo the warm-up
+        every call inside a hot loop.
+        """
+        # Best-effort warm-up: we do this on a single page so the cookie
+        # carries over to the JSON request.
+        if "reddit.com" not in (self.page.url or "").lower():
+            try:
+                safe_goto(self.page, WARMUP_URL, timeout=20000, retries=1)
+                human_delay(0.6, 1.2)
+            except Exception:
+                pass
+
+        url_primary = self.POST_JSON_URL.format(
+            post_id=post_id, limit=max(comment_limit, 50)
+        )
+        url_fallback = self.POST_JSON_URL_OLD.format(
+            post_id=post_id, limit=max(comment_limit, 50)
+        )
+
+        body_text = ""
+        for url in (url_primary, url_fallback):
+            try:
+                resp = self.page.request.get(
+                    url,
+                    headers={
+                        "Accept": "application/json",
+                        "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) "
+                                       "AppleWebKit/537.36 (KHTML, like Gecko) "
+                                       "Chrome/142.0.0.0 Safari/537.36 "
+                                       "AgentSearch/1.0",
+                    },
+                    timeout=20000,
+                )
+            except Exception as e:
+                log.debug("[reddit] post JSON fetch failed (%s): %s", url, e)
+                continue
+            if resp.status == 200:
+                body_text = resp.text() or ""
+                break
+            log.debug("[reddit] post JSON %s -> %s", url, resp.status)
+        if not body_text:
+            return {}
+
+        import json as _json
+        try:
+            data = _json.loads(body_text)
+        except _json.JSONDecodeError as e:
+            log.debug("[reddit] post JSON parse failed: %s", e)
+            return {}
+
+        if not isinstance(data, list) or len(data) < 1:
+            return {}
+
+        # data[0] = post listing, data[1] = comments listing (when present).
+        post_listing = data[0] or {}
+        comments_listing = data[1] if len(data) > 1 else None
+
+        try:
+            post = (
+                post_listing.get("data", {})
+                .get("children", [{}])[0]
+                .get("data", {})
+            )
+        except (AttributeError, IndexError):
+            return {}
+        if not post:
+            return {}
+
+        # Build the post record.
+        permalink = post.get("permalink") or ""
+        full_url = (
+            f"https://www.reddit.com{permalink}" if permalink else
+            f"https://www.reddit.com/comments/{post_id}"
+        )
+
+        out = {
+            "id": post.get("id") or post_id,
+            "url": full_url,
+            "subreddit": post.get("subreddit_name_prefixed") or "",
+            "title": post.get("title") or "",
+            "author": post.get("author") or "",
+            "score": post.get("score"),
+            "num_comments": post.get("num_comments"),
+            "created_utc": post.get("created_utc"),
+            "selftext": post.get("selftext") or "",
+            "is_self": bool(post.get("is_self")),
+            "is_video": bool(post.get("is_video")),
+            "is_gallery": bool(post.get("is_gallery")),
+            "over_18": bool(post.get("over_18")),
+            "link_url": post.get("url") or "",
+            "image_urls": [],
+            "video_url": "",
+            "gallery": [],
+        }
+
+        # Media extraction — same fields PRAW exposes via Submission.
+        out.update(self._extract_post_media(post))
+
+        # Comments — flat-walk the tree, tagging depth.
+        if comments_listing:
+            comments = self._extract_comments(comments_listing, comment_limit)
+            out["comments"] = comments
+        else:
+            out["comments"] = []
+
+        return out
+
+    @staticmethod
+    def _extract_post_media(post: dict) -> dict:
+        """Pull image_urls / video_url / gallery from a post dict.
+
+        Reddit's media schema has 5 mutually-non-exclusive places media can
+        live. We check each:
+          1. ``post.url`` ends with .jpg/.png/.gif/.gifv (direct i.redd.it).
+          2. ``post.preview.images[].source.url`` (preview images, html-encoded).
+          3. ``post.media.reddit_video.fallback_url`` (v.redd.it mp4).
+          4. ``post.secure_media.reddit_video.fallback_url`` (HTTPS mp4).
+          5. ``post.is_gallery`` + ``post.gallery_data.items`` +
+             ``post.media_metadata`` (multi-image gallery).
+        """
+        import html as _html
+        image_urls: list[str] = []
+        video_url = ""
+        gallery: list[dict] = []
+
+        link = post.get("url") or ""
+        # Direct image link.
+        if any(link.lower().endswith(ext) for ext in (".jpg", ".jpeg", ".png", ".gif", ".webp")):
+            image_urls.append(link)
+        # .gifv / Imgur etc — keep as link only.
+
+        # Preview images (html-encoded URLs in JSON).
+        try:
+            for img in (post.get("preview") or {}).get("images") or []:
+                src = (img.get("source") or {}).get("url")
+                if src:
+                    image_urls.append(_html.unescape(src))
+        except Exception:
+            pass
+
+        # Reddit-hosted video.
+        for key in ("media", "secure_media"):
+            rv = (post.get(key) or {}).get("reddit_video") if post.get(key) else None
+            if rv:
+                fb = rv.get("fallback_url") or ""
+                if fb and not video_url:
+                    video_url = fb
+                break
+
+        # Galleries.
+        if post.get("is_gallery"):
+            try:
+                items = (post.get("gallery_data") or {}).get("items") or []
+                meta = post.get("media_metadata") or {}
+                for it in items:
+                    mid = it.get("media_id") or ""
+                    md = meta.get(mid) or {}
+                    s = (md.get("s") or {}).get("u") or (md.get("s") or {}).get("gif") or ""
+                    if s:
+                        s = _html.unescape(s)
+                        gallery.append({"url": s, "media_id": mid})
+                        image_urls.append(s)
+            except Exception:
+                pass
+
+        # De-duplicate image_urls preserving order.
+        seen: set = set()
+        deduped: list[str] = []
+        for u in image_urls:
+            if u in seen:
+                continue
+            seen.add(u)
+            deduped.append(u)
+
+        return {
+            "image_urls": deduped,
+            "video_url": video_url,
+            "gallery": gallery,
+        }
+
+    @staticmethod
+    def _extract_comments(comments_listing: dict, max_total: int) -> list[dict]:
+        """Flatten the comment tree into a list of dicts (depth-first).
+
+        Stops once ``max_total`` comments have been collected to bound size.
+        Skips ``more`` placeholder nodes (they require another XHR to expand
+        — we keep things to a single round-trip).
+        """
+        out: list[dict] = []
+        children = (comments_listing.get("data") or {}).get("children") or []
+
+        def _walk(nodes, depth):
+            if len(out) >= max_total:
+                return
+            for n in nodes or []:
+                if len(out) >= max_total:
+                    return
+                if not isinstance(n, dict):
+                    continue
+                kind = n.get("kind")
+                if kind == "more":
+                    # Skip placeholder; would require a second XHR.
+                    continue
+                if kind != "t1":
+                    continue
+                d = n.get("data") or {}
+                replies = d.get("replies") or {}
+                inner = (
+                    replies.get("data", {}).get("children")
+                    if isinstance(replies, dict) else None
+                )
+                permalink = d.get("permalink") or ""
+                full_link = (
+                    f"https://www.reddit.com{permalink}" if permalink else ""
+                )
+                out.append({
+                    "id": d.get("id"),
+                    "author": d.get("author") or "",
+                    "score": d.get("score"),
+                    "body": d.get("body") or "",
+                    "created_utc": d.get("created_utc"),
+                    "depth": depth,
+                    "permalink": full_link,
+                })
+                if inner:
+                    _walk(inner, depth + 1)
+
+        _walk(children, 0)
+        return out
