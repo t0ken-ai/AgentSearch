@@ -57,6 +57,12 @@ class BrowserConfig:
     # Stealth (CloakBrowser's C++ patches) still applies — this is strictly
     # better than driving the user's real Chrome via CDP.
     user_data_dir: str | None = None
+    # Optional proxy rotation pool. When ``proxy`` is None and this is set,
+    # ``launch()`` calls ``proxy_pool.next()`` to pick a proxy URL per
+    # browser launch (across-invocation rotation). The pool's strategy
+    # (random / round-robin / sticky) decides the order.
+    # Type-hinted as ``Any`` to avoid a hard import cycle with proxy.py.
+    proxy_pool: object | None = None
 
 
 def launch(config: BrowserConfig | None = None):
@@ -68,6 +74,28 @@ def launch(config: BrowserConfig | None = None):
     """
     cfg = config or BrowserConfig()
 
+    # Resolve the effective proxy: explicit URL takes precedence, otherwise
+    # consult the rotation pool (if any). The picked Proxy is stashed back
+    # on cfg so callers can `mark_ok` / `mark_fail` after the run.
+    effective_proxy = cfg.proxy
+    cfg._picked_proxy = None  # type: ignore[attr-defined]
+    if not effective_proxy and cfg.proxy_pool is not None:
+        try:
+            picked = cfg.proxy_pool.next()
+        except Exception as e:
+            log.warning("[proxy] pool.next() failed: %s", e)
+            picked = None
+        if picked is not None:
+            effective_proxy = picked.url
+            cfg._picked_proxy = picked  # type: ignore[attr-defined]
+            log.info(
+                "[proxy] using %s://%s:%d (source=%s, score=%.2f)",
+                picked.scheme, picked.host, picked.port,
+                picked.source or "user", picked.health_score(),
+            )
+        else:
+            log.warning("[proxy] pool empty — launching without proxy")
+
     tz = cfg.timezone
     loc = cfg.locale
     if not tz and not cfg.geoip:
@@ -75,7 +103,7 @@ def launch(config: BrowserConfig | None = None):
 
     common = dict(
         headless=cfg.headless,
-        proxy=cfg.proxy,
+        proxy=effective_proxy,
         timezone=tz,
         locale=loc or "en-US",
         geoip=cfg.geoip,

@@ -5,6 +5,7 @@ import importlib
 import inspect
 import json
 import logging
+import os
 import pkgutil
 import sys
 import time
@@ -239,9 +240,11 @@ def cmd_search(args):
     health = HealthLog()
     cfg = BrowserConfig(
         headless=not args.visible,
-        proxy=args.proxy,
         user_data_dir=_resolve_profile_dir(getattr(args, "profile", None)),
     )
+    if getattr(args, "proxy", None):
+        from .proxy import apply_proxy_spec_to_config
+        apply_proxy_spec_to_config(cfg, args.proxy)
     browser = launch(cfg)
     started = time.time()
     results = []
@@ -329,6 +332,9 @@ def cmd_extract(args):
         headless=not args.visible,
         user_data_dir=_resolve_profile_dir(getattr(args, "profile", None)),
     )
+    if getattr(args, "proxy", None):
+        from .proxy import apply_proxy_spec_to_config
+        apply_proxy_spec_to_config(cfg, args.proxy)
     browser = launch(cfg)
     try:
         page = new_page(browser)
@@ -576,6 +582,153 @@ def cmd_status(args):
     return 0
 
 
+def cmd_proxies(args):
+    """Manage the local proxy pool cached at ~/.cache/agentsearch/proxies.json.
+
+    Subactions: fetch / test / list / add / clear.
+    """
+    from .proxy import (
+        DEFAULT_CACHE_FILE,
+        GITHUB_SOURCES,
+        SOURCE_BUNDLES,
+        Proxy,
+        ProxyPool,
+    )
+
+    action = getattr(args, "proxies_action", None)
+    if action is None:
+        # Default: same as `proxies list`.
+        action = "list"
+
+    cache_path = getattr(args, "cache", None) or str(DEFAULT_CACHE_FILE)
+
+    if action == "fetch":
+        sources = args.sources or "all"
+        pool = ProxyPool.load_from_cache(cache_path)
+        before = len(pool)
+        for s in [x.strip() for x in sources.split(",") if x.strip()]:
+            n = pool.fetch_from_github(s, limit=args.limit)
+            print(f"  {s}: +{n}")
+        path = pool.save(cache_path)
+        print(f"\nTotal: {len(pool)} (was {before}). Saved to {path}.")
+        print(f"Available sources: {', '.join(GITHUB_SOURCES)}")
+        print(f"Available bundles: {', '.join(SOURCE_BUNDLES)}")
+        return 0
+
+    if action == "test":
+        pool = ProxyPool.load_from_cache(cache_path)
+        if len(pool) == 0:
+            print(f"Pool empty. Run `agentsearch proxies fetch` first.", file=sys.stderr)
+            return 1
+        scheme_filter = args.scheme or None
+        target = args.target or "https://api.ipify.org?format=text"
+        max_test = args.max_test
+        print(
+            f"Testing {min(max_test or len(pool), len(pool))} proxies "
+            f"(scheme={scheme_filter or 'any'}, target={target}, "
+            f"workers={args.workers}, timeout={args.timeout}s) ..."
+        )
+        t0 = time.time()
+        res = pool.test_all(
+            max_workers=args.workers,
+            target_url=target,
+            timeout=args.timeout,
+            scheme_filter=scheme_filter,
+            max_test=max_test,
+        )
+        print(
+            f"  done in {time.time()-t0:.1f}s — "
+            f"ok={res['ok']} fail={res['fail']} skipped={res['skipped']}"
+        )
+        path = pool.save(cache_path)
+        print(f"  saved to {path}")
+        return 0
+
+    if action == "list":
+        pool = ProxyPool.load_from_cache(cache_path)
+        stats = pool.stats()
+        if args.json:
+            print(json.dumps({
+                "cache": cache_path,
+                "stats": stats,
+                "proxies": [p.to_json() for p in pool.all],
+            }, ensure_ascii=False, indent=2))
+            return 0
+        print(f"Cache: {cache_path}")
+        print(
+            f"Total: {stats['total']}  healthy: {stats['healthy']}  "
+            f"by_scheme: {stats['by_scheme']}"
+        )
+        if not pool.all:
+            return 0
+        # Sort by health score descending; show top N (default 30).
+        n = args.limit or 30
+        rows = sorted(
+            pool.all,
+            key=lambda p: (p.health_score(), -1 * (p.fail_count + p.success_count)),
+            reverse=True,
+        )[:n]
+        print()
+        print(f"{'proxy':<48} {'src':<22} {'ok':>4} {'fail':>5} {'ms':>6}  last")
+        print("-" * 100)
+        for p in rows:
+            ms = f"{p.latency_ms:.0f}" if p.latency_ms is not None else "—"
+            last = ""
+            if p.last_ok_at:
+                ago = int(time.time() - p.last_ok_at)
+                if ago < 60:
+                    last = f"{ago}s ago"
+                elif ago < 3600:
+                    last = f"{ago // 60}m ago"
+                else:
+                    last = f"{ago // 3600}h ago"
+            elif p.last_err:
+                last = "err: " + p.last_err[:30]
+            url = p.server  # show without auth in the listing
+            if p.username:
+                url = f"{p.scheme}://<auth>@{p.host}:{p.port}"
+            print(f"{url:<48} {p.source[:22]:<22} {p.success_count:>4} {p.fail_count:>5} {ms:>6}  {last}")
+        return 0
+
+    if action == "add":
+        if not args.url:
+            print("Provide one or more proxy URLs / 'host:port' lines.", file=sys.stderr)
+            return 2
+        pool = ProxyPool.load_from_cache(cache_path)
+        added = 0
+        for raw in args.url:
+            p = Proxy.from_url(raw, source="user")
+            if p is None:
+                print(f"  rejected: {raw!r}", file=sys.stderr)
+                continue
+            before = len(pool)
+            pool.add(p)
+            if len(pool) > before:
+                added += 1
+                print(f"  added: {p.server}")
+            else:
+                print(f"  duplicate: {p.server}")
+        if added:
+            path = pool.save(cache_path)
+            print(f"\nSaved to {path}.")
+        return 0
+
+    if action == "clear":
+        # Drop the on-disk cache (after a confirmation if --yes wasn't given).
+        if not args.yes:
+            print(f"Will delete {cache_path}. Re-run with --yes to confirm.", file=sys.stderr)
+            return 1
+        try:
+            os.unlink(cache_path)
+            print(f"Removed {cache_path}.")
+        except FileNotFoundError:
+            print(f"No cache to remove ({cache_path}).")
+        return 0
+
+    print(f"Unknown action: {action}", file=sys.stderr)
+    return 2
+
+
 def main():
     logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
 
@@ -598,7 +751,14 @@ def main():
     sp.add_argument("--limit", "-n", type=int, default=10)
     sp.add_argument("--json", action="store_true", help="Output as JSON")
     sp.add_argument("--visible", action="store_true", help="Run in headed mode")
-    sp.add_argument("--proxy", default=None, help="Proxy URL")
+    sp.add_argument(
+        "--proxy",
+        default=None,
+        help="Proxy spec. Forms: 'http://1.2.3.4:8080', 'socks5://u:p@host:1080', "
+             "'pool' (rotate from ~/.cache/agentsearch/proxies.json), "
+             "'pool:socks5' (filter by scheme), 'pool:/path/to/cache.json', "
+             "or 'file:/path/to/list.txt'. See `agentsearch proxies --help`.",
+    )
     sp.add_argument(
         "--fallback",
         action="store_true",
@@ -661,6 +821,11 @@ def main():
         default=None,
         help="Use a persistent CloakBrowser profile by name (login state).",
     )
+    ep.add_argument(
+        "--proxy",
+        default=None,
+        help="Proxy spec (see `agentsearch search --help`).",
+    )
 
     # list-engines
     lp = sub.add_parser("list-engines", help="List available engines")
@@ -722,6 +887,69 @@ def main():
     # up in the global --help banner.
     sub.add_parser("canary", help="Health check across all engines (local; auto-files GitHub issues — see docs/CANARY.md)")
 
+    # proxies — manage the local proxy pool used by --proxy pool[:scheme].
+    pp = sub.add_parser(
+        "proxies",
+        help="Manage the local proxy pool (~/.cache/agentsearch/proxies.json)",
+    )
+    pp.add_argument(
+        "--cache",
+        default=None,
+        help="Override the cache file path (default: ~/.cache/agentsearch/proxies.json)",
+    )
+    pp_sub = pp.add_subparsers(dest="proxies_action")
+
+    pp_fetch = pp_sub.add_parser(
+        "fetch",
+        help="Pull proxies from GitHub free-lists (proxifly / roosterkid / TheSpeedX / Zaeem20)",
+    )
+    pp_fetch.add_argument(
+        "--sources",
+        default="all",
+        help="Comma-separated source / bundle names. "
+             "Bundles: all / http / socks / socks4 / socks5. "
+             "Individual: proxifly_http, proxifly_socks5, roosterkid_https, "
+             "speedx_socks5, zaeem_http, etc. Default: all.",
+    )
+    pp_fetch.add_argument(
+        "--limit", type=int, default=None,
+        help="Cap each source at this many lines (default: no cap)",
+    )
+
+    pp_test = pp_sub.add_parser(
+        "test",
+        help="Test cached HTTP/HTTPS proxies against a live target and update health scores. "
+             "(SOCKS proxies are skipped here — they're verified inside the browser at use time.)",
+    )
+    pp_test.add_argument("--workers", type=int, default=30, help="Concurrent connections (default: 30)")
+    pp_test.add_argument("--timeout", type=float, default=8.0, help="Per-proxy timeout seconds (default: 8)")
+    pp_test.add_argument(
+        "--scheme",
+        choices=["http", "https", "socks4", "socks5"],
+        default=None,
+        help="Only test proxies of this scheme",
+    )
+    pp_test.add_argument(
+        "--target",
+        default=None,
+        help="URL to fetch through each proxy (default: https://api.ipify.org?format=text)",
+    )
+    pp_test.add_argument(
+        "--max-test", type=int, default=None,
+        help="Cap the number of proxies tested (handy when the pool is huge)",
+    )
+
+    pp_list = pp_sub.add_parser("list", help="Show cached proxies sorted by health score")
+    pp_list.add_argument("--limit", type=int, default=30, help="Max rows (default: 30)")
+    pp_list.add_argument("--json", action="store_true", help="Output as JSON")
+
+    pp_add = pp_sub.add_parser("add", help="Add a proxy (or several) to the pool")
+    pp_add.add_argument("url", nargs="+",
+                        help="Proxy URL(s): 'http://user:pass@1.2.3.4:8080' or 'host:port'")
+
+    pp_clear = pp_sub.add_parser("clear", help="Delete the proxy cache")
+    pp_clear.add_argument("--yes", action="store_true", help="Confirm")
+
     # bundle subcommands (jobs / research / news / code)
     for bundle_name, engines in _BUNDLES.items():
         bp = sub.add_parser(
@@ -755,6 +983,8 @@ def main():
         sys.exit(cmd_bundle(args))
     elif args.command == "test":
         sys.exit(cmd_test(args))
+    elif args.command == "proxies":
+        sys.exit(cmd_proxies(args))
 
 
 if __name__ == "__main__":
