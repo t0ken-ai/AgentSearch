@@ -24,6 +24,13 @@ _ALIASES: dict[str, tuple[str, str]] = {
     "archive":     ("archive_org",       "ArchiveOrgEngine"),
     "1337x":       ("torrent_1337x",     "Torrent1337xEngine"),
     "reddit_sub":  ("reddit_subreddit",  "RedditSubredditEngine"),
+    # Ad intelligence.
+    "tt_ads":      ("tiktok_creative_center", "TikTokCreativeCenterEngine"),
+    "ttcc":        ("tiktok_creative_center", "TikTokCreativeCenterEngine"),
+    "fb_ads":      ("meta_ad_library",   "MetaAdLibraryEngine"),
+    "meta_ads":    ("meta_ad_library",   "MetaAdLibraryEngine"),
+    "g_ads":       ("google_ad_transparency", "GoogleAdTransparencyEngine"),
+    "tiktok_ads":  ("tiktok_ad_library", "TikTokAdLibraryEngine"),
 }
 
 
@@ -498,6 +505,10 @@ _BUNDLES: dict[str, list[str]] = {
     # Skyscanner left out for now: free-text queries don't map cleanly
     # to its structured origin/destination/dates input.
     "travel": ["booking", "expedia"],
+    # Ad intelligence — competitive creative research across the three
+    # major public ad libraries. Returns image / video URLs + first/last
+    # seen so a marketing agent can build evergreen swipe files.
+    "ads": ["meta_ad_library", "google_ad_transparency", "tiktok_creative_center"],
 }
 
 
