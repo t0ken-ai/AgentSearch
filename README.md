@@ -588,6 +588,46 @@ agentsearch search "apple" --engine yahoo_finance --limit 3 --json
 ```
 </details>
 
+<details>
+<summary><b>🌐 Route through HTTP / SOCKS proxies (rotate when rate-limited)</b></summary>
+
+When your home IP gets throttled by Instagram / YouTube / Reddit, switch
+to proxies. Supports HTTP / HTTPS / SOCKS4 / SOCKS5 with auth, rotation
+strategies, and on-disk caching.
+
+```bash
+# 1. Pull a free list from GitHub (proxifly / roosterkid / TheSpeedX / Zaeem20)
+agentsearch proxies fetch --sources socks5 --limit 200    # bundle: socks5
+agentsearch proxies fetch --sources proxifly_http --limit 100  # one source
+
+# 2. Health-check the cached pool (HTTP/HTTPS only — SOCKS verified at use)
+agentsearch proxies test --workers 50 --timeout 8 --max-test 200
+
+# 3. Inspect the pool
+agentsearch proxies list --limit 30
+
+# 4. Use a single static proxy
+agentsearch search "rate-limited query" --engine google \
+  --proxy http://user:pass@1.2.3.4:8080
+
+# 5. Rotate from the pool (each invocation picks one via the pool's strategy)
+agentsearch search "..." --engine instagram --proxy pool          # any scheme
+agentsearch search "..." --engine youtube  --proxy pool:socks5    # filter
+agentsearch search "..." --engine reddit   --proxy pool:/path/list.json
+agentsearch search "..." --engine google   --proxy file:/path/proxies.txt
+
+# 6. Add a paid residential proxy by hand (recommended for production)
+agentsearch proxies add http://user:pw@proxy.webshare.io:80 \
+                       socks5://user:pw@gate.bright.com:33335
+```
+
+> **Note:** Free public proxies have very low hit rates (most listed are
+> dead within minutes). For serious automation buy a residential pool from
+> Webshare / Bright Data / Oxylabs / IPRoyal — the same `--proxy` /
+> `proxies add` API works, just with much higher uptime.
+
+</details>
+
 ---
 
 ## 🔒 Privacy & Security

@@ -568,6 +568,44 @@ agentsearch search "apple" --engine yahoo_finance --limit 3 --json
 ```
 </details>
 
+<details>
+<summary><b>🌐 走 HTTP / SOCKS 代理（被限流时轮换出口 IP）</b></summary>
+
+家里 IP 被 Instagram / YouTube / Reddit 限流时，切代理。支持
+HTTP / HTTPS / SOCKS4 / SOCKS5（含账密），有轮换策略和本地缓存。
+
+```bash
+# 1. 从 GitHub 拉免费列表（proxifly / roosterkid / TheSpeedX / Zaeem20 四家）
+agentsearch proxies fetch --sources socks5 --limit 200       # 整个 socks5 套餐
+agentsearch proxies fetch --sources proxifly_http --limit 100  # 单个 source
+
+# 2. 跑健康检查（HTTP/HTTPS 走 urllib，SOCKS 由浏览器使用时验证）
+agentsearch proxies test --workers 50 --timeout 8 --max-test 200
+
+# 3. 看池子状态
+agentsearch proxies list --limit 30
+
+# 4. 直接用一个静态代理
+agentsearch search "限流的 query" --engine google \
+  --proxy http://user:pass@1.2.3.4:8080
+
+# 5. 从池子轮换（每次调用按池策略选一条）
+agentsearch search "..." --engine instagram --proxy pool          # 任意 scheme
+agentsearch search "..." --engine youtube  --proxy pool:socks5    # 仅 SOCKS5
+agentsearch search "..." --engine reddit   --proxy pool:/path/list.json
+agentsearch search "..." --engine google   --proxy file:/path/proxies.txt
+
+# 6. 手动加付费住宅代理（生产推荐）
+agentsearch proxies add http://user:pw@proxy.webshare.io:80 \
+                       socks5://user:pw@gate.bright.com:33335
+```
+
+> **提醒：** GitHub 上的免费代理命中率非常低（绝大多数列出的 IP 几分钟内就死了）。
+> 严肃用途请买 Webshare / Bright Data / Oxylabs / IPRoyal 的住宅代理 ——
+> 同样的 `--proxy` / `proxies add` 接口，存活率高得多。
+
+</details>
+
 ---
 
 ## 🔒 隐私 & 安全
