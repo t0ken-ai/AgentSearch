@@ -202,6 +202,40 @@ def _looks_like_username(query: str) -> bool:
     return bool(USERNAME_RE.match(q))
 
 
+def _find_media_node(obj, shortcode: str | None = None):
+    """Recursively walk a parsed JSON tree and return the first
+    ``xdt_api__v1__media__shortcode__web_info.items[0]`` dict found.
+
+    When ``shortcode`` is given, prefer items whose ``code`` matches; if
+    nothing matches exactly, return the first item encountered (some
+    related-grid payloads sit alongside the main post payload in the
+    same script blob).
+    """
+    fallback = None
+    stack = [obj]
+    while stack:
+        cur = stack.pop()
+        if isinstance(cur, dict):
+            wi = cur.get("xdt_api__v1__media__shortcode__web_info")
+            if isinstance(wi, dict):
+                items = wi.get("items")
+                if isinstance(items, list) and items:
+                    item = items[0]
+                    if isinstance(item, dict):
+                        if shortcode and item.get("code") == shortcode:
+                            return item
+                        if fallback is None:
+                            fallback = item
+            for v in cur.values():
+                if isinstance(v, (dict, list)):
+                    stack.append(v)
+        elif isinstance(cur, list):
+            for v in cur:
+                if isinstance(v, (dict, list)):
+                    stack.append(v)
+    return fallback
+
+
 def _extract_shortcode(query: str) -> tuple[str, str] | None:
     """If ``query`` is a shortcode or post/reel URL, return (path, shortcode).
 
@@ -733,7 +767,18 @@ class InstagramEngine(BaseEngine):
     # ----------------------------------------------------- post detail
 
     def _fetch_post_meta(self, path: str, shortcode: str) -> dict:
-        """Visit ``instagram.com/<path>/<sc>/`` and parse og meta."""
+        """Visit ``instagram.com/<path>/<sc>/`` and parse og meta + web_info JSON.
+
+        Two data sources are merged with web_info preferred when present:
+
+        1. ``<script type="application/json">`` blobs containing
+           ``xdt_api__v1__media__shortcode__web_info`` — the same JSON node
+           IG's GraphQL ``doc_id=8845758582119845`` returns. Yields exact
+           like_count (not "3M"), full untruncated caption, image candidates
+           at every resolution, video URLs, and sidecar children.
+        2. ``og:description`` meta — fallback when the Relay payload is
+           missing (e.g. transient block) and as a sanity check.
+        """
         if path not in ("p", "reel"):
             return {}
         url = self.POST_URL.format(path=path, sc=shortcode)
@@ -747,52 +792,197 @@ class InstagramEngine(BaseEngine):
             self.last_status["block_reason"] = "login_redirect"
             return {}
 
+        # Path 1: try the embedded web_info JSON (best data).
+        web_info = self._extract_web_info(shortcode)
+        # Path 2: og meta (always run — used as fallback / sanity check).
         og = self._read_og_meta()
-        post = _parse_og_post_description(
+        og_post = _parse_og_post_description(
             og.get("og:description") or og.get("description") or ""
         )
-        # Sometimes ``og:url`` carries the canonical user-prefixed URL —
-        # use that as authoritative source for username.
-        user = post.get("user") or ""
-        og_url = og.get("og:url") or ""
-        m_url = OG_POST_URL_RE.search(og_url)
-        if m_url and not user:
-            user = m_url.group("user")
-        # post_type from path or og:url
-        post_type = "reel" if path == "reel" else "post"
-        if m_url:
-            post_type = "reel" if m_url.group("path") == "reel" else "post"
 
-        # If nothing parsed, treat as failed.
-        if not og.get("og:title") and not og.get("og:description"):
+        # If neither source yielded anything, treat as failed.
+        if not web_info and not og.get("og:title") and not og.get("og:description"):
             return {}
 
-        title = og.get("og:title") or ""
-        caption = post.get("caption") or ""
-        # og:title is usually "<User> on Instagram: \"caption\""
-        if not caption and ": \"" in title:
+        # Determine canonical post_type.
+        post_type = "reel" if path == "reel" else "post"
+        if web_info:
+            mt = web_info.get("media_type")
+            if mt == 8:
+                post_type = "sidecar"
+            elif mt == 2 or web_info.get("video_versions"):
+                post_type = "reel" if path == "reel" else "video"
+
+        # Username.
+        user = ""
+        if web_info:
+            u = web_info.get("user") or {}
+            user = (u.get("username") or "").lstrip("@")
+        if not user:
+            user = (og_post.get("user") or "").lstrip("@")
+        if not user:
+            og_url = og.get("og:url") or ""
+            m_url = OG_POST_URL_RE.search(og_url)
+            if m_url:
+                user = m_url.group("user")
+
+        # Caption (prefer untruncated web_info text).
+        caption = ""
+        if web_info:
+            cap_obj = web_info.get("caption") or {}
+            if isinstance(cap_obj, dict):
+                caption = cap_obj.get("text") or ""
+        if not caption:
+            caption = og_post.get("caption") or ""
+            if not caption:
+                title = og.get("og:title") or ""
+                if ": \"" in title:
+                    try:
+                        caption = title.split(": \"", 1)[1].rstrip("\"")
+                    except Exception:
+                        pass
+
+        # Likes / comments — prefer exact web_info ints.
+        likes = web_info.get("like_count") if web_info else None
+        comments = web_info.get("comment_count") if web_info else None
+        likes_text = ""
+        comments_text = ""
+        if likes is not None:
+            likes_text = f"{likes:,}"
+        else:
+            likes = og_post.get("likes")
+            likes_text = og_post.get("likes_text", "")
+        if comments is not None:
+            comments_text = f"{comments:,}"
+        else:
+            comments = og_post.get("comments")
+            comments_text = og_post.get("comments_text", "")
+
+        # Posted_at — web_info gives unix ts, og gives "January 14, 2026".
+        posted_at = ""
+        taken_at_unix = web_info.get("taken_at") if web_info else None
+        if taken_at_unix:
             try:
-                caption = title.split(": \"", 1)[1].rstrip("\"")
+                from datetime import datetime, timezone
+                dt = datetime.fromtimestamp(int(taken_at_unix), tz=timezone.utc)
+                posted_at = dt.strftime("%Y-%m-%d %H:%M:%S UTC")
             except Exception:
                 pass
+        if not posted_at:
+            posted_at = og_post.get("posted_at", "")
+
+        # Media URLs: image (best of image_versions2) and video.
+        image_url = ""
+        image_urls: list[str] = []
+        video_url = ""
+        video_urls: list[str] = []
+        sidecar: list[dict] = []
+        if web_info:
+            iv = (web_info.get("image_versions2") or {}).get("candidates") or []
+            # Sort by resolution descending so [0] is the highest quality.
+            iv_sorted = sorted(
+                iv, key=lambda c: (c.get("width") or 0) * (c.get("height") or 0),
+                reverse=True,
+            )
+            image_urls = [c.get("url", "") for c in iv_sorted if c.get("url")]
+            if image_urls:
+                image_url = image_urls[0]
+            vv = web_info.get("video_versions") or []
+            vv_sorted = sorted(
+                vv, key=lambda v: (v.get("width") or 0) * (v.get("height") or 0),
+                reverse=True,
+            )
+            video_urls = [v.get("url", "") for v in vv_sorted if v.get("url")]
+            if video_urls:
+                video_url = video_urls[0]
+            for child in (web_info.get("carousel_media") or []):
+                ch_iv = (child.get("image_versions2") or {}).get("candidates") or []
+                ch_iv_sorted = sorted(
+                    ch_iv,
+                    key=lambda c: (c.get("width") or 0) * (c.get("height") or 0),
+                    reverse=True,
+                )
+                ch_vv = child.get("video_versions") or []
+                ch_vv_sorted = sorted(
+                    ch_vv,
+                    key=lambda v: (v.get("width") or 0) * (v.get("height") or 0),
+                    reverse=True,
+                )
+                sidecar.append({
+                    "code": child.get("code"),
+                    "media_type": child.get("media_type"),
+                    "is_video": bool(ch_vv),
+                    "image_url": (ch_iv_sorted[0]["url"] if ch_iv_sorted else ""),
+                    "video_url": (ch_vv_sorted[0]["url"] if ch_vv_sorted else ""),
+                })
+        if not image_url:
+            image_url = og.get("og:image", "") or ""
+
+        # Title fallback.
+        title = og.get("og:title") or ""
+        if not title:
+            if user and caption:
+                title = f"{user} on Instagram: \"{caption[:100]}\""
+            elif user:
+                title = f"@{user} on Instagram"
+            else:
+                title = f"Instagram {post_type}"
 
         return {
             "url": url,
             "shortcode": shortcode,
             "post_type": post_type,
-            "user": user.lstrip("@"),
+            "user": user,
             "user_url": (
-                f"https://www.instagram.com/{user.lstrip('@')}/" if user else ""
+                f"https://www.instagram.com/{user}/" if user else ""
             ),
             "title": title,
             "caption": caption,
-            "likes_text": post.get("likes_text", ""),
-            "likes": post.get("likes"),
-            "comments_text": post.get("comments_text", ""),
-            "comments": post.get("comments"),
-            "posted_at": post.get("posted_at", ""),
-            "image_url": og.get("og:image", ""),
+            "likes_text": likes_text,
+            "likes": likes,
+            "comments_text": comments_text,
+            "comments": comments,
+            "posted_at": posted_at,
+            "image_url": image_url,
+            "image_urls": image_urls,
+            "video_url": video_url,
+            "video_urls": video_urls,
+            "sidecar": sidecar,
+            "media_count": 1 + len(sidecar) if not sidecar else len(sidecar),
+            "play_count": web_info.get("play_count") if web_info else None,
+            "view_count": web_info.get("view_count") if web_info else None,
+            "video_duration": web_info.get("video_duration") if web_info else None,
+            "media_id": web_info.get("pk") if web_info else None,
         }
+
+    def _extract_web_info(self, shortcode: str) -> dict | None:
+        """Walk every ``<script type="application/json">`` blob looking for the
+        ``xdt_api__v1__media__shortcode__web_info`` payload. Returns the
+        first ``items[0]`` dict whose ``code`` matches ``shortcode``, or
+        the first one found if the codes don't line up.
+        """
+        try:
+            scripts: list[str] = self.page.evaluate(
+                """
+                () => Array.from(document.querySelectorAll('script[type="application/json"]'))
+                    .map(s => s.textContent || '')
+                    .filter(t => t && t.includes('xdt_api__v1__media__shortcode__web_info'))
+                """
+            ) or []
+        except Exception as e:
+            log.debug("[instagram] web_info script scan failed: %s", e)
+            return None
+        log.debug("[instagram] web_info candidate scripts: %d", len(scripts))
+        import json as _json
+        for txt in scripts:
+            try:
+                data = _json.loads(txt)
+            except Exception:
+                continue
+            node = _find_media_node(data, shortcode)
+            if node:
+                return node
+        return None
 
     def _post_meta_to_result(
         self, data: dict, *, source: str
@@ -809,6 +999,12 @@ class InstagramEngine(BaseEngine):
             head.append(f"{data['comments_text']} comments")
         if data.get("posted_at"):
             head.append(data["posted_at"])
+        # Surface the sidecar / video count when present.
+        sidecar = data.get("sidecar") or []
+        if sidecar:
+            head.append(f"{len(sidecar)}x sidecar")
+        if data.get("video_duration"):
+            head.append(f"{data['video_duration']:.1f}s video")
         snippet = " · ".join(head)
         if data.get("caption"):
             snippet = snippet + " — " + data["caption"]
@@ -831,8 +1027,18 @@ class InstagramEngine(BaseEngine):
             comments_text=data.get("comments_text") or "",
             source=source,
         )
-        r.posted_at = data.get("posted_at") or ""  # type: ignore[attr-defined]
-        r.image_url = data.get("image_url") or ""  # type: ignore[attr-defined]
+        # Media URLs and additional metadata
+        r.posted_at = data.get("posted_at") or ""        # type: ignore[attr-defined]
+        r.image_url = data.get("image_url") or ""        # type: ignore[attr-defined]
+        r.image_urls = data.get("image_urls") or []      # type: ignore[attr-defined]
+        r.video_url = data.get("video_url") or ""        # type: ignore[attr-defined]
+        r.video_urls = data.get("video_urls") or []      # type: ignore[attr-defined]
+        r.sidecar = sidecar                              # type: ignore[attr-defined]
+        r.media_count = data.get("media_count")          # type: ignore[attr-defined]
+        r.play_count = data.get("play_count")            # type: ignore[attr-defined]
+        r.view_count = data.get("view_count")            # type: ignore[attr-defined]
+        r.video_duration = data.get("video_duration")    # type: ignore[attr-defined]
+        r.media_id = data.get("media_id")                # type: ignore[attr-defined]
         return r
 
     def _enrich_results_inplace(self, results: list[SearchResult]) -> None:
@@ -863,7 +1069,10 @@ class InstagramEngine(BaseEngine):
             consecutive_fail = 0
             # Fill blanks; never overwrite caller-provided fields.
             for fld in ("likes", "likes_text", "comments", "comments_text",
-                        "posted_at", "image_url"):
+                        "posted_at", "image_url", "image_urls",
+                        "video_url", "video_urls", "sidecar",
+                        "media_count", "play_count", "view_count",
+                        "video_duration", "media_id"):
                 if not getattr(r, fld, None):
                     try:
                         setattr(r, fld, data.get(fld))

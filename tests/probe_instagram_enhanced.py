@@ -58,12 +58,16 @@ def _summarise(results: list) -> dict:
             "n": 0, "with_user": 0, "with_caption": 0,
             "with_likes": 0, "with_comments": 0,
             "with_posted_at": 0, "with_image": 0,
+            "with_image_urls": 0, "with_video_url": 0,
             "by_post_type": {}, "by_source": {},
         }
     pt: dict = {}
     src: dict = {}
-    fields = {"with_user": 0, "with_caption": 0, "with_likes": 0,
-              "with_comments": 0, "with_posted_at": 0, "with_image": 0}
+    fields = {
+        "with_user": 0, "with_caption": 0, "with_likes": 0,
+        "with_comments": 0, "with_posted_at": 0, "with_image": 0,
+        "with_image_urls": 0, "with_video_url": 0,
+    }
     for r in results:
         if getattr(r, "user", ""):
             fields["with_user"] += 1
@@ -77,6 +81,10 @@ def _summarise(results: list) -> dict:
             fields["with_posted_at"] += 1
         if getattr(r, "image_url", ""):
             fields["with_image"] += 1
+        if getattr(r, "image_urls", None):
+            fields["with_image_urls"] += 1
+        if getattr(r, "video_url", ""):
+            fields["with_video_url"] += 1
         pt[getattr(r, "post_type", "?")] = pt.get(getattr(r, "post_type", "?"), 0) + 1
         src[getattr(r, "source", "?")] = src.get(getattr(r, "source", "?"), 0) + 1
     return {"n": n, **fields, "by_post_type": pt, "by_source": src}
