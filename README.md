@@ -178,6 +178,9 @@ Internet Archive · 1337x
 **🖼️ Images (4)**
 Unsplash · Pixabay · Pexels · Pinterest
 
+**📣 Ad Intelligence (4)** 🆕
+Meta Ad Library (FB/IG) · Google Ads Transparency · TikTok Creative Center · TikTok Ad Library
+
 </td>
 </tr>
 </table>
@@ -625,6 +628,61 @@ agentsearch proxies add http://user:pw@proxy.webshare.io:80 \
 > dead within minutes). For serious automation buy a residential pool from
 > Webshare / Bright Data / Oxylabs / IPRoyal — the same `--proxy` /
 > `proxies add` API works, just with much higher uptime.
+
+</details>
+
+<details>
+<summary><b>📣 Ad Intelligence — research competitor creatives across Meta / Google / TikTok</b></summary>
+
+The four ad-library engines turn AgentSearch into a self-hosted
+competitor of BigSpy / AdSpy / SocialPeta — same data, no $99/mo
+subscription, results in standard `SearchResult` JSON ready for an
+agent to consume.
+
+```bash
+# 1. TikTok Creative Center — Top Ads by industry / region / time window
+agentsearch search "" --engine tt_ads --limit 10 --json
+# Filters: --period 7|30|180  --country_code US|GB|JP  --order_by ctr|like|cvr
+# Returns: ad_id, ctr, likes, industry_key, video_url (5 resolutions),
+#          cover_image_url, duration, brand_name
+
+# 2. Meta Ad Library — keyword / advertiser search across FB + IG
+agentsearch search "shopify" --engine meta_ads --limit 20 --json
+# Returns per ad: ad_archive_id, page_name, days_running, image_urls[],
+#                 video_urls[], body_text, cta_text, link_url, country
+# Tip: Meta heavily rate-limits non-residential IPs — pair with --proxy:
+agentsearch search "shopify" --engine meta_ads --proxy pool:residential
+
+# 3. Google Ads Transparency — find advertisers + their ad libraries
+agentsearch search "nike" --engine g_ads --limit 10 --json
+# Returns advertiser_id, country, ad_count. Click into each URL or use:
+agentsearch search "AR01625195283841286145" --engine g_ads --limit 20 \
+  --mode advertiser_ads
+
+# 4. TikTok Ad Library — EU/UK only (DSA-mandated)
+agentsearch search "burger king" --engine tiktok_ads --region GB --limit 10
+# Outside EU/UK → use tt_ads (Creative Center) instead.
+
+# 5. Cross-platform fan-out — `ads` bundle hits all three at once
+agentsearch ads "summer skincare" --limit 5
+# → meta_ad_library + google_ad_transparency + tiktok_creative_center
+#   in parallel, merged output.
+
+# 6. Save creative directly to disk (combine with --json + jq + curl)
+agentsearch search "" --engine tt_ads --limit 20 --json | \
+  jq -r '.[] | .video_url' | xargs -n1 -P4 curl -O
+```
+
+**Why this works** — every platform now publishes a transparency portal
+(EU DSA + voluntary self-regulation). They expose creative + run dates
+publicly; what they hide is real spend / CTR / ROAS. The longest-running
+ads are the proven winners — **a creative running 60+ days is almost
+certainly profitable**, no spy tool can give you better signal.
+
+> See `IMPROVEMENT_BACKLOG.md` (P1.5-K..N) for known caveats: Meta needs
+> residential proxy + sometimes rate-limits even those; TikTok Ad
+> Library is EU/UK only without `agentsearch login tiktok_business`
+> (planned); Google Ads Transparency `advertiser_ads` mode is best-effort.
 
 </details>
 

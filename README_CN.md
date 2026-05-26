@@ -168,6 +168,9 @@ Internet Archive · 1337x
 **🖼️ 图片 (4)**
 Unsplash · Pixabay · Pexels · Pinterest
 
+**📣 广告情报 (4)** 🆕
+Meta Ad Library (FB/IG) · Google Ads Transparency · TikTok Creative Center · TikTok Ad Library
+
 </td>
 </tr>
 </table>
@@ -603,6 +606,58 @@ agentsearch proxies add http://user:pw@proxy.webshare.io:80 \
 > **提醒：** GitHub 上的免费代理命中率非常低（绝大多数列出的 IP 几分钟内就死了）。
 > 严肃用途请买 Webshare / Bright Data / Oxylabs / IPRoyal 的住宅代理 ——
 > 同样的 `--proxy` / `proxies add` 接口，存活率高得多。
+
+</details>
+
+<details>
+<summary><b>📣 广告情报 — 在 Meta / Google / TikTok 上做竞品创意分析</b></summary>
+
+四个广告库 engine 把 AgentSearch 变成自托管的 BigSpy / 广大大 / SocialPeta —
+同样的数据，免费 / 自己抓 / 结果直接是标准 `SearchResult` JSON 给 agent 消费。
+
+```bash
+# 1. TikTok Creative Center — 按行业 / 地区 / 时间窗看 Top Ads
+agentsearch search "" --engine tt_ads --limit 10 --json
+# Filter: --period 7|30|180  --country_code US|CN|JP  --order_by ctr|like|cvr
+# 返回字段: ad_id, ctr, likes, industry_key, video_url（5 个码率），
+#           cover_image_url, duration, brand_name
+
+# 2. Meta Ad Library — FB + IG 关键词 / 广告主搜
+agentsearch search "shopify" --engine meta_ads --limit 20 --json
+# 每条返回: ad_archive_id, page_name, days_running, image_urls[],
+#            video_urls[], body_text, cta_text, link_url, country
+# 注意: Meta 对非住宅 IP 限流严重 — 配合 --proxy 用：
+agentsearch search "shopify" --engine meta_ads --proxy pool:residential
+
+# 3. Google Ads Transparency — 找广告主 + 看他们的广告库
+agentsearch search "nike" --engine g_ads --limit 10 --json
+# 返回 advertiser_id, country, ad_count。点 URL 进去看，或：
+agentsearch search "AR01625195283841286145" --engine g_ads --limit 20 \
+  --mode advertiser_ads
+
+# 4. TikTok Ad Library — 仅 EU/UK（DSA 监管）
+agentsearch search "burger king" --engine tiktok_ads --region GB --limit 10
+# EU/UK 之外用 tt_ads（Creative Center）。
+
+# 5. 跨平台并行 — `ads` bundle 一次打三个
+agentsearch ads "summer skincare" --limit 5
+# → meta_ad_library + google_ad_transparency + tiktok_creative_center
+#   并行扇出，结果合并。
+
+# 6. 把素材直接下到本地（管道用法）
+agentsearch search "" --engine tt_ads --limit 20 --json | \
+  jq -r '.[] | .video_url' | xargs -n1 -P4 curl -O
+```
+
+**为什么这能跑通** — 每个平台现在都建了 transparency 入口（EU DSA + 自我合规），
+公开了创意 + 投放时间。**他们不公开的是真实消耗 / CTR / ROAS**，所以广大大、
+BigSpy 卖的"消耗排行"全是估算（impressions × 行业 CPM）。一个广告挂超过
+**60 天的几乎一定盈利** —— 这是唯一真实可见的 performance signal，比任何
+spy tool 的估算都准。
+
+> 详见 `IMPROVEMENT_BACKLOG.md`（P1.5-K..N）的已知限制：Meta 需要住宅代理
+> 且偶尔仍被限；TikTok Ad Library 在 `agentsearch login tiktok_business`
+> （计划中）之前仅限 EU/UK；Google ATC 的 `advertiser_ads` 模式是 best-effort。
 
 </details>
 
