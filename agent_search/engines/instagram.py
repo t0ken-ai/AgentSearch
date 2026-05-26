@@ -1,44 +1,35 @@
-"""Instagram search adapter.
+"""Instagram search adapter — multi-mode crawler with og-meta enrichment.
 
-Instagram aggressively blocks unauthenticated automation: most public
-endpoints render a login wall within a second of landing, and even when a
-hashtag page does render, the post grid hydrates from XHR calls that the
-guest token cannot complete. This engine therefore has two completely
-separate code paths and the public ``search()`` method picks the first one
-that returns anything useful:
+Modes (all reachable from ``InstagramEngine.search(query, ..., mode=...)``):
 
-1. **Direct path** — ``https://www.instagram.com/explore/tags/<tag>/``.
-   On a "good" session the page does render anchors of the form
-   ``/p/<shortcode>/`` (feed posts) or ``/reel/<shortcode>/`` (reels) even
-   without login, but a few things commonly go wrong:
+* ``"hashtag"`` (default): drive ``instagram.com/explore/tags/<tag>/``,
+  optionally scroll for more cards. If the direct grid is empty / blocked,
+  fall back through Google → DuckDuckGo → Bing ``site:instagram.com`` SERPs.
+* ``"user"``: treat the query as an Instagram username, hit
+  ``instagram.com/<username>/``, parse the ``og:*`` meta tags for
+  follower/following/post counts + bio, and walk the recent-posts grid.
+* ``"post"``: treat the query as a shortcode (``DTfS7SMEk8B``) or a full
+  ``/p/<sc>/`` / ``/reel/<sc>/`` URL, fetch the post page, and parse the
+  ``og:description`` for ``likes / comments / posted_at / username / caption``.
+* ``"keyword"``: requires a logged-in profile (``--profile instagram``).
+  Drives Instagram's internal ``/explore/search/keyword/?q=...`` flow which
+  returns users, hashtags, and places.
+* ``"auto"`` (legacy): hashtag mode (preserves the older behaviour).
 
-   * A login modal opens within ~1-2s. We try to dismiss it (close button,
-     "Not now" link, or click outside) before extraction.
-   * Some regions hard-redirect ``/explore/tags/<tag>/`` to
-     ``/accounts/login/`` for guests.
-   * The grid is hydrated client-side from a private XHR; we wait for at
-     least one ``a[href*="/p/"]`` or ``a[href*="/reel/"]`` to attach
-     before parsing.
+All :class:`SearchResult`s carry the same attributes as before:
+``user``, ``user_url``, ``shortcode``, ``post_type``, ``caption``, ``likes``,
+``likes_text``, ``comments``, ``comments_text``, ``source``. Two new
+optional attributes are populated when the engine has them:
 
-2. **Google ``site:instagram.com`` fallback** — when the direct path
-   returns nothing, we drive :class:`GoogleEngine` on the same page and
-   keep only the hits whose URL points at an Instagram post or reel
-   (``/p/<shortcode>/`` or ``/reel/<shortcode>/``). This is how we still
-   produce results when Instagram itself blocks us, the same trick the
-   TikTok adapter uses with its Google fallback.
+* ``image_url`` – first ``og:image`` URL from the post detail page (only
+  filled when ``enrich=True`` or in ``post`` / ``user`` mode).
+* ``posted_at`` – ISO-ish date string parsed from ``og:description``.
 
-Each :class:`SearchResult` carries:
+The engine also exposes two public helpers for callers that already have a
+post URL or username and just want enrichment without a search:
 
-* ``user``        – ``username`` of the uploader (no leading ``@``), or "" if unknown
-* ``user_url``    – absolute URL to the author profile, or "" if unknown
-* ``shortcode``   – Instagram's post shortcode from ``/p/<sc>/`` or ``/reel/<sc>/``
-* ``post_type``   – ``"post"`` or ``"reel"``
-* ``caption``     – original caption text (may be empty)
-* ``likes``       – integer like count when shown, ``None`` otherwise
-* ``likes_text``  – original "12.3K" / "1.2M" string (kept for display)
-* ``comments``    – integer comment count when shown, ``None`` otherwise
-* ``comments_text`` – original comments-count string
-* ``source``      – ``"instagram"`` (direct) or ``"google"`` (fallback)
+* :meth:`InstagramEngine.fetch_post` ``(url_or_shortcode)`` → dict
+* :meth:`InstagramEngine.fetch_profile` ``(username)`` → dict
 """
 
 from __future__ import annotations
@@ -52,6 +43,7 @@ import urllib.parse
 from ..core import safe_goto, human_delay
 from .base import BaseEngine, SearchResult
 from .google import GoogleEngine
+from .duckduckgo import DuckDuckGoEngine
 
 log = logging.getLogger(__name__)
 
@@ -61,7 +53,7 @@ log = logging.getLogger(__name__)
 # shortcode is Instagram's URL-safe base64 id.
 POST_HREF_RE = re.compile(r"^/(p|reel)/([A-Za-z0-9_-]+)/?")
 ABS_POST_URL_RE = re.compile(
-    r"https?://(?:www\.)?instagram\.com/(p|reel)/([A-Za-z0-9_-]+)/?"
+    r"https?://(?:www\.)?instagram\.com/(?:[A-Za-z0-9_.]+/)?(p|reel)/([A-Za-z0-9_-]+)/?"
 )
 # Profile / user link, e.g. ``/some_user/`` (excluding reserved prefixes).
 USER_HREF_RE = re.compile(
@@ -69,6 +61,39 @@ USER_HREF_RE = re.compile(
     r"legal|press|api|emails|web|graphql|locations|tags|challenge|igtv|"
     r"_n|_u|_i)[A-Za-z0-9_.]+)/?$"
 )
+
+# Heuristic: looks like a single Instagram handle (used to auto-pick mode).
+USERNAME_RE = re.compile(r"^[A-Za-z0-9_.]{2,30}$")
+# A bare shortcode (the ``DTfS7SMEk8B`` part). IG shortcodes are URL-safe
+# base64 of length ~11 and *always* mix cases / digits — we use that to
+# avoid eating English words like "travel" as accidental shortcodes.
+SHORTCODE_RE = re.compile(r"^(?=.*[A-Z])(?=.*[a-z0-9])[A-Za-z0-9_-]{10,15}$")
+
+# ``og:description`` of a post page looks like
+#   "3M likes, 5,787 comments - <user> on January 14, 2026: \"<caption>\""
+# Sometimes likes are hidden ("<user> on ..." with no leading counts).
+# We *don't* anchor with ``$`` because SERP snippets often truncate the
+# tail with "..." or strip the closing quote. Caption is captured lazily
+# up to the first closing ``"``; if the closing ``"`` is missing we fall
+# back to "everything after the colon" via a second pattern below.
+OG_POST_DESC_RE = re.compile(
+    r"^\s*(?:(?P<likes>[\d.,KMBkmb]+)\s+likes?,\s*(?P<comments>[\d.,KMBkmb]+)\s+comments?\s*[-–—]\s*)?"
+    r"(?P<user>[A-Za-z0-9_.]{2,30})\s+on\s+(?P<date>(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\s+\d{1,2},?\s+\d{4})"
+    r"(?::\s*[\"“](?P<caption>.*?)(?:[\"”]\.?|$))?",
+    re.DOTALL,
+)
+# ``og:description`` of a profile page looks like
+#   "269M Followers, 195 Following, 32K Posts - See Instagram photos and videos from National Geographic (@natgeo)"
+OG_PROFILE_DESC_RE = re.compile(
+    r"^\s*(?P<followers>[\d.,KMBkmb]+)\s+Followers?,\s*(?P<following>[\d.,KMBkmb]+)\s+Following?,\s*(?P<posts>[\d.,KMBkmb]+)\s+Posts?\b",
+    re.IGNORECASE,
+)
+# `og:url` of a post detail page is usually
+#   "https://www.instagram.com/<user>/reel/<sc>/" or ".../p/<sc>/"
+OG_POST_URL_RE = re.compile(
+    r"https?://(?:www\.)?instagram\.com/(?P<user>[A-Za-z0-9_.]+)/(?P<path>p|reel)/(?P<sc>[A-Za-z0-9_-]+)/?"
+)
+
 
 # Selectors used to detect whether the hashtag / search page has hydrated.
 RESULT_PRESENCE_SELECTORS = [
@@ -85,7 +110,6 @@ LOGIN_MODAL_CLOSE_SELECTORS = [
     'svg[aria-label="Close"]',
     'div[role="dialog"] button[aria-label="Close"]',
     'div[role="presentation"] button[aria-label="Close"]',
-    # The "Not Now" link on the "Save your login info?" prompt.
     "button:has-text('Not Now')",
     "button:has-text('Not now')",
 ]
@@ -116,6 +140,8 @@ BLOCK_PHRASES = [
     "checkpoint_required",
 ]
 
+
+# ---------------------------------------------------------------- helpers
 
 def _abs_url(href: str) -> str:
     """Make an Instagram href absolute against ``www.instagram.com``."""
@@ -162,46 +188,246 @@ def _hashtagify(query: str) -> str:
     if not query:
         return ""
     q = query.strip().lstrip("#").lower()
+    # Keep ASCII alnum, underscore, and any non-ASCII letters (CJK etc.).
     return re.sub(r"[^a-z0-9_\u00c0-\uffff]+", "", q)
 
 
+def _looks_like_username(query: str) -> bool:
+    """Heuristic: ``@user`` or a bare ``user`` (single token, no spaces)."""
+    if not query:
+        return False
+    q = query.strip().lstrip("@")
+    if " " in q or "#" in q:
+        return False
+    return bool(USERNAME_RE.match(q))
+
+
+def _extract_shortcode(query: str) -> tuple[str, str] | None:
+    """If ``query`` is a shortcode or post/reel URL, return (path, shortcode).
+
+    ``path`` is ``"p"`` or ``"reel"``. Returns ``None`` otherwise.
+    """
+    if not query:
+        return None
+    q = query.strip()
+    m = ABS_POST_URL_RE.search(q)
+    if m:
+        return m.group(1), m.group(2)
+    if SHORTCODE_RE.fullmatch(q):
+        return "p", q
+    return None
+
+
+def _parse_og_post_description(text: str) -> dict:
+    """Parse a post/reel ``og:description`` meta value.
+
+    Returns a dict possibly containing keys: ``likes_text``, ``likes``,
+    ``comments_text``, ``comments``, ``user``, ``posted_at``, ``caption``.
+    """
+    if not text:
+        return {}
+    m = OG_POST_DESC_RE.match(text.strip())
+    if not m:
+        return {}
+    out: dict = {}
+    if m.group("likes"):
+        out["likes_text"] = m.group("likes")
+        out["likes"] = _parse_count(m.group("likes"))
+    if m.group("comments"):
+        out["comments_text"] = m.group("comments")
+        out["comments"] = _parse_count(m.group("comments"))
+    if m.group("user"):
+        out["user"] = m.group("user")
+    if m.group("date"):
+        out["posted_at"] = m.group("date").strip()
+    if m.group("caption"):
+        out["caption"] = m.group("caption").strip()
+    return out
+
+
+def _parse_og_profile_description(text: str) -> dict:
+    """Parse a profile ``og:description`` meta value.
+
+    Returns a dict possibly containing keys: ``followers_text``, ``followers``,
+    ``following_text``, ``following``, ``posts_text``, ``posts``.
+    """
+    if not text:
+        return {}
+    m = OG_PROFILE_DESC_RE.search(text.strip())
+    if not m:
+        return {}
+    out: dict = {}
+    out["followers_text"] = m.group("followers")
+    out["followers"] = _parse_count(m.group("followers"))
+    out["following_text"] = m.group("following")
+    out["following"] = _parse_count(m.group("following"))
+    out["posts_text"] = m.group("posts")
+    out["posts"] = _parse_count(m.group("posts"))
+    return out
+
+
+# ---------------------------------------------------------------- engine
+
 class InstagramEngine(BaseEngine):
-    """Search Instagram via the public hashtag page, with a Google fallback."""
+    """Search / scrape Instagram with hashtag, user, post, and keyword modes."""
 
     name = "instagram"
-    max_retries = 2  # The Google fallback already adds resilience.
+    max_retries = 2  # The fallback chain already adds resilience.
 
     TAG_URL = "https://www.instagram.com/explore/tags/{tag}/"
+    USER_URL = "https://www.instagram.com/{user}/"
+    POST_URL = "https://www.instagram.com/{path}/{sc}/"
     SEARCH_URL = "https://www.instagram.com/explore/search/keyword/?q={q}"
     HOMEPAGE_URL = "https://www.instagram.com/"
+
+    # Reserved usernames that cannot be Instagram handles. Used to filter
+    # out bogus matches when we slug-extract a username.
+    RESERVED_USERS = frozenset({
+        "explore", "p", "reel", "reels", "stories", "accounts", "direct",
+        "about", "developer", "legal", "press", "api", "emails", "web",
+        "graphql", "locations", "tags", "challenge", "igtv",
+    })
 
     def __init__(self, page):
         super().__init__(page)
         # Diagnostics surface for callers / tests.
         self.last_status: dict = {}
+        # Lazy: only checked when keyword mode is requested.
+        self._authed: bool | None = None
 
-    # ------------------------------------------------------------ main flow
+    # --------------------------------------------------------- public API
 
-    def _do_search(self, query: str, limit: int) -> list[SearchResult]:
-        # 1) Try the direct Instagram hashtag page.
-        direct = self._search_direct(query, limit)
-        if direct:
-            self.last_status["mode"] = "direct"
-            return direct
+    def search(  # type: ignore[override]
+        self,
+        query: str,
+        limit: int = 10,
+        *,
+        mode: str = "auto",
+        enrich: bool = False,
+        max_scrolls: int = 0,
+    ) -> list[SearchResult]:
+        """Run an Instagram search.
 
-        # 2) Fall back to Google `site:instagram.com`.
-        log.info(
-            "[instagram] direct path empty; falling back to Google "
-            "site:instagram.com"
+        Parameters
+        ----------
+        query    : free text, hashtag, username, shortcode, or post URL.
+        limit    : max number of results to return.
+        mode     : ``"auto"`` (default), ``"hashtag"``, ``"user"``,
+                   ``"post"``, or ``"keyword"``. ``"auto"`` keeps the
+                   legacy behaviour: hashtag with Google fallback.
+        enrich   : if True, after the listing path returns shortcodes,
+                   visit each post detail page and fill ``likes`` /
+                   ``comments`` / ``posted_at`` / ``image_url``. Adds
+                   roughly +1.5s per result.
+        max_scrolls : in hashtag / user mode, how many extra scrolls
+                   (each ~12 cards) to perform after the first paint.
+                   ``0`` disables scrolling (legacy behaviour).
+        """
+        self.last_status = {"mode_requested": mode}
+        for attempt in range(self.max_retries):
+            try:
+                results = self._do_search_dispatch(
+                    query, limit, mode=mode, enrich=enrich,
+                    max_scrolls=max_scrolls,
+                )
+                if results:
+                    return results
+            except Exception as e:
+                log.error(
+                    "[%s] mode=%s error (attempt %d): %s",
+                    self.name, mode, attempt + 1, e,
+                )
+            human_delay(2, 4)
+        return []
+
+    def fetch_post(self, url_or_shortcode: str) -> dict:
+        """Fetch a single post / reel and return all parsed fields.
+
+        Returns ``{}`` when the post can't be reached (login wall, 404, or
+        challenge). Otherwise returns a dict with keys ``url`` ``shortcode``
+        ``post_type`` ``user`` ``user_url`` ``caption`` ``likes`` ``likes_text``
+        ``comments`` ``comments_text`` ``posted_at`` ``image_url`` ``title``.
+        """
+        sc = _extract_shortcode(url_or_shortcode)
+        if not sc:
+            return {}
+        return self._fetch_post_meta(sc[0], sc[1])
+
+    def fetch_profile(self, username: str) -> dict:
+        """Fetch a profile's metadata + recent posts grid.
+
+        Returns ``{}`` on failure. Otherwise returns a dict with keys
+        ``user`` ``user_url`` ``display_name`` ``bio`` ``profile_pic_url``
+        ``followers`` ``followers_text`` ``following`` ``following_text``
+        ``posts`` ``posts_text`` ``recent``  (list of {shortcode, post_type, url, caption}).
+        """
+        return self._fetch_profile(username.lstrip("@"))
+
+    # --------------------------------------------------------- dispatch
+
+    def _do_search_dispatch(
+        self,
+        query: str,
+        limit: int,
+        *,
+        mode: str,
+        enrich: bool,
+        max_scrolls: int,
+    ) -> list[SearchResult]:
+        """Single-attempt dispatcher (the retry loop sits in ``search``)."""
+        m = (mode or "auto").lower()
+
+        # post mode: query *is* the URL / shortcode.
+        if m == "post":
+            sc = _extract_shortcode(query)
+            if not sc:
+                self.last_status["error"] = "no_shortcode_in_query"
+                return []
+            data = self._fetch_post_meta(*sc)
+            if not data:
+                return []
+            return [self._post_meta_to_result(data, source="instagram")]
+
+        # user mode: query is a username.
+        if m == "user":
+            username = query.strip().lstrip("@")
+            return self._search_user_profile(
+                username, limit, enrich=enrich, max_scrolls=max_scrolls
+            )
+
+        # keyword mode: needs login.
+        if m == "keyword":
+            return self._search_logged_in_keyword(query, limit, enrich=enrich)
+
+        # auto mode: re-route obvious shortcode / URL queries to post mode,
+        # but keep the historic hashtag-first behaviour for regular text.
+        if m == "auto":
+            sc = _extract_shortcode(query)
+            if sc:
+                data = self._fetch_post_meta(*sc)
+                if data:
+                    return [self._post_meta_to_result(data, source="instagram")]
+            # fall through to hashtag
+
+        # default: hashtag with the multi-fallback chain.
+        results = self._search_hashtag(
+            query, limit, max_scrolls=max_scrolls
         )
-        fallback = self._search_google_fallback(query, limit)
-        if fallback:
-            self.last_status["mode"] = "google"
-        return fallback
+        if not results:
+            results = self._search_serp_fallbacks(query, limit)
+        if enrich and results:
+            self._enrich_results_inplace(results)
+        return results
 
-    # ------------------------------------------------------------ direct path
+    # ----------------------------------------------------- hashtag (direct)
 
-    def _search_direct(self, query: str, limit: int) -> list[SearchResult]:
+    def _search_hashtag(
+        self,
+        query: str,
+        limit: int,
+        *,
+        max_scrolls: int = 0,
+    ) -> list[SearchResult]:
         """Hit Instagram's hashtag page and try to parse the rendered DOM."""
         # Warm-up: visit homepage so basic cookies get set before we ask
         # for a hashtag page (otherwise the redirect to /accounts/login/
@@ -236,21 +462,54 @@ class InstagramEngine(BaseEngine):
         if self._is_blocked():
             return []
 
-        # Wait for at least one post / reel anchor to attach.
         if not self._wait_for_results(timeout_ms=8000):
             log.info(
                 "[instagram] no result anchors after wait; "
                 "trying extraction anyway"
             )
 
-        # Extra overlay sweep in case the login modal slid up while we waited.
         self._dismiss_overlays()
 
-        results = self._extract_direct(limit)
-        log.info("[instagram] direct path extracted: %d", len(results))
+        # Scroll for more cards if requested.
+        if max_scrolls > 0:
+            self._scroll_grid(max_scrolls)
+
+        results = self._extract_grid(limit)
+
+        # Force-scroll-if-empty: occasionally IG renders the page chrome
+        # (title, "X reels on Instagram") but withholds the grid until
+        # something nudges hydration. A single scroll usually unblocks it.
+        if not results and max_scrolls == 0:
+            log.info(
+                "[instagram] grid empty after wait; nudging with one scroll"
+            )
+            self._scroll_grid(1)
+            results = self._extract_grid(limit)
+
+        log.info("[instagram] hashtag direct extracted: %d", len(results))
+        if results:
+            self.last_status["mode"] = "hashtag_direct"
         return results
 
-    def _extract_direct(self, limit: int) -> list[SearchResult]:
+    def _scroll_grid(self, max_scrolls: int) -> None:
+        """Scroll the hashtag / user grid to trigger lazy-loading more cards."""
+        for i in range(max_scrolls):
+            try:
+                self.page.evaluate(
+                    "() => window.scrollBy(0, document.body.scrollHeight)"
+                )
+            except Exception as e:
+                log.debug("[instagram] scroll %d failed: %s", i + 1, e)
+                break
+            time.sleep(random.uniform(1.4, 2.4))
+            try:
+                self.page.evaluate(
+                    "() => window.scrollBy(0, -200)"  # tiny up-scroll to nudge hydration
+                )
+            except Exception:
+                pass
+
+    def _extract_grid(self, limit: int) -> list[SearchResult]:
         """Walk every Instagram post / reel anchor on the page."""
         try:
             raw: list[dict] = self.page.evaluate(_EXTRACT_JS) or []
@@ -258,7 +517,7 @@ class InstagramEngine(BaseEngine):
             log.warning("[instagram] extraction JS failed: %s", e)
             raw = []
 
-        log.info("[instagram] direct raw extracted: %d", len(raw))
+        log.info("[instagram] grid raw extracted: %d", len(raw))
 
         results: list[SearchResult] = []
         seen: set[str] = set()
@@ -301,84 +560,577 @@ class InstagramEngine(BaseEngine):
                 snippet = snippet + " — " + caption
 
             r = SearchResult(title=title[:200], url=url, snippet=snippet[:400])
-            r.user = user                                            # type: ignore[attr-defined]
-            r.user_url = user_url                                    # type: ignore[attr-defined]
-            r.shortcode = shortcode                                  # type: ignore[attr-defined]
-            r.post_type = post_type                                  # type: ignore[attr-defined]
-            r.caption = caption                                      # type: ignore[attr-defined]
-            r.likes = likes                                          # type: ignore[attr-defined]
-            r.likes_text = likes_text                                # type: ignore[attr-defined]
-            r.comments = comments                                    # type: ignore[attr-defined]
-            r.comments_text = comments_text                          # type: ignore[attr-defined]
-            r.source = "instagram"                                   # type: ignore[attr-defined]
+            self._stamp_post_attrs(
+                r, user=user, user_url=user_url, shortcode=shortcode,
+                post_type=post_type, caption=caption,
+                likes=likes, likes_text=likes_text,
+                comments=comments, comments_text=comments_text,
+                source="instagram",
+            )
             results.append(r)
             if len(results) >= limit:
                 break
 
         return results
 
-    # ------------------------------------------------------------ Google fallback
+    # ----------------------------------------------------- user / profile
 
-    def _search_google_fallback(
-        self, query: str, limit: int
+    def _search_user_profile(
+        self,
+        username: str,
+        limit: int,
+        *,
+        enrich: bool,
+        max_scrolls: int,
     ) -> list[SearchResult]:
-        """Use GoogleEngine for ``site:instagram.com <query>``.
+        """Hit ``instagram.com/<user>/`` and return their recent posts."""
+        if not username:
+            self.last_status["error"] = "empty_username"
+            return []
+        # Warm-up so cookies land first.
+        if safe_goto(self.page, self.HOMEPAGE_URL, timeout=20000, retries=1):
+            human_delay(0.8, 1.6)
+            self._dismiss_overlays()
 
-        We use *two* strategies on the Google results page:
+        url = self.USER_URL.format(user=urllib.parse.quote(username))
+        log.info("[instagram] navigating to user %s", url)
+        if not safe_goto(self.page, url, timeout=30000):
+            self.last_status = {"phase": "user", "error": "goto_failed"}
+            return []
+        human_delay(2.0, 3.5)
+        self._dismiss_overlays()
+        self._human_hints()
 
-        1. ``GoogleEngine.search()`` returns the structured organic-results
-           list. We keep any whose URL matches an Instagram post / reel URL.
-        2. Right after, we walk the *full* DOM of the Google results page
-           ourselves and collect every anchor whose href matches an
-           Instagram post / reel URL. This catches results in the carousel,
-           "Top stories" cards, and other layouts that GoogleEngine's
-           ``.tF2Cxc``-based extraction misses.
-
-        We narrow the query with ``(inurl:p OR inurl:reel)`` so Google
-        biases toward actual post pages instead of profile pages, hashtag
-        index pages, or ``/explore/`` landing pages, which can't be
-        normalised to a ``/p/<sc>/`` or ``/reel/<sc>/`` URL.
-        """
-        try:
-            google = GoogleEngine(self.page)
-        except Exception as e:
-            log.warning("[instagram] cannot construct GoogleEngine: %s", e)
+        # Recognise the IG "user not found" shape.
+        cur = (self.page.url or "").lower()
+        if "instagram.com/accounts/login" in cur:
+            self.last_status = {"phase": "user", "block_reason": "login_redirect"}
             return []
 
-        # Use the hashtag form of the query when possible — that's what
-        # Google indexes for IG posts.
+        # Always parse og meta for profile-level info.
+        og = self._read_og_meta()
+        prof_meta = _parse_og_profile_description(og.get("og:description", ""))
+        log.info(
+            "[instagram] profile %s og parsed: %s", username, prof_meta
+        )
+
+        # Walk recent post grid (typically 12 cards anonymously).
+        if max_scrolls > 0:
+            self._scroll_grid(max_scrolls)
+        results = self._extract_grid(limit)
+
+        # Stamp the profile-level metadata on every result so callers can
+        # see "@<user> | 269M followers | 4,800 posts" without an extra
+        # round-trip.
+        for r in results:
+            r.user = username  # type: ignore[attr-defined]
+            r.user_url = url  # type: ignore[attr-defined]
+            r.followers = prof_meta.get("followers")  # type: ignore[attr-defined]
+            r.followers_text = prof_meta.get("followers_text", "")  # type: ignore[attr-defined]
+            r.profile_posts = prof_meta.get("posts")  # type: ignore[attr-defined]
+            r.profile_posts_text = prof_meta.get("posts_text", "")  # type: ignore[attr-defined]
+            r.source = "instagram_profile"  # type: ignore[attr-defined]
+
+        # If grid was empty but og meta worked, return at least a single
+        # synthetic result that carries the profile metadata so the agent
+        # gets *something* useful (very common when IG gates the SPA).
+        if not results and prof_meta:
+            r = SearchResult(
+                title=og.get("og:title", f"@{username} on Instagram")[:200],
+                url=url,
+                snippet=og.get("og:description", "")[:400],
+            )
+            self._stamp_post_attrs(
+                r, user=username, user_url=url, shortcode="",
+                post_type="profile", caption=og.get("description", ""),
+                likes=None, likes_text="",
+                comments=None, comments_text="",
+                source="instagram_profile",
+            )
+            r.followers = prof_meta.get("followers")  # type: ignore[attr-defined]
+            r.followers_text = prof_meta.get("followers_text", "")  # type: ignore[attr-defined]
+            r.profile_posts = prof_meta.get("posts")  # type: ignore[attr-defined]
+            r.profile_posts_text = prof_meta.get("posts_text", "")  # type: ignore[attr-defined]
+            r.image_url = og.get("og:image", "")  # type: ignore[attr-defined]
+            results = [r]
+
+        self.last_status["mode"] = "user"
+        if enrich and results:
+            self._enrich_results_inplace(
+                [r for r in results if getattr(r, "shortcode", "")]
+            )
+        return results
+
+    def _fetch_profile(self, username: str) -> dict:
+        """Public-shaped profile dump with og meta + recent posts."""
+        if not username:
+            return {}
+        if safe_goto(self.page, self.HOMEPAGE_URL, timeout=20000, retries=1):
+            human_delay(0.6, 1.2)
+            self._dismiss_overlays()
+        url = self.USER_URL.format(user=urllib.parse.quote(username))
+        if not safe_goto(self.page, url, timeout=30000):
+            return {}
+        human_delay(1.5, 2.8)
+        self._dismiss_overlays()
+        cur = (self.page.url or "").lower()
+        if "instagram.com/accounts/login" in cur:
+            return {}
+        og = self._read_og_meta()
+        prof = _parse_og_profile_description(og.get("og:description", ""))
+        # Bio: the full ``description`` meta is usually
+        #   "<followers> Followers, ... - <DisplayName> (@user) on Instagram: \"<bio>\""
+        # We extract the part after the colon.
+        bio = ""
+        desc = og.get("description", "") or ""
+        idx = desc.find(": \"")
+        if idx >= 0:
+            bio = desc[idx + 3 :].strip().rstrip("\"")
+        # display name from og:title => "<Display> (@user) • Instagram photos and videos"
+        display = ""
+        ot = og.get("og:title", "") or ""
+        m_disp = re.match(r"^(.*?)\s*\(@", ot)
+        if m_disp:
+            display = m_disp.group(1).strip()
+
+        # recent posts: walk the grid (no scroll for the public helper —
+        # callers can pass max_scrolls via search() if they want more).
+        try:
+            raw: list[dict] = self.page.evaluate(_EXTRACT_JS) or []
+        except Exception:
+            raw = []
+        recent: list[dict] = []
+        seen: set[str] = set()
+        for item in raw:
+            sc = (item.get("shortcode") or "").strip()
+            href = (item.get("href") or "").strip()
+            mh = POST_HREF_RE.match(href)
+            if not sc or sc in seen or not mh:
+                continue
+            seen.add(sc)
+            recent.append({
+                "shortcode": sc,
+                "post_type": "reel" if mh.group(1) == "reel" else "post",
+                "url": f"https://www.instagram.com/{mh.group(1)}/{sc}/",
+                "caption": (item.get("caption") or "").strip(),
+            })
+
+        return {
+            "user": username,
+            "user_url": url,
+            "display_name": display,
+            "bio": bio,
+            "profile_pic_url": og.get("og:image", ""),
+            "followers_text": prof.get("followers_text", ""),
+            "followers": prof.get("followers"),
+            "following_text": prof.get("following_text", ""),
+            "following": prof.get("following"),
+            "posts_text": prof.get("posts_text", ""),
+            "posts": prof.get("posts"),
+            "recent": recent,
+        }
+
+    # ----------------------------------------------------- post detail
+
+    def _fetch_post_meta(self, path: str, shortcode: str) -> dict:
+        """Visit ``instagram.com/<path>/<sc>/`` and parse og meta."""
+        if path not in ("p", "reel"):
+            return {}
+        url = self.POST_URL.format(path=path, sc=shortcode)
+        if not safe_goto(self.page, url, timeout=25000):
+            return {}
+        human_delay(1.2, 2.4)
+        self._dismiss_overlays()
+
+        cur = (self.page.url or "").lower()
+        if "instagram.com/accounts/login" in cur:
+            self.last_status["block_reason"] = "login_redirect"
+            return {}
+
+        og = self._read_og_meta()
+        post = _parse_og_post_description(
+            og.get("og:description") or og.get("description") or ""
+        )
+        # Sometimes ``og:url`` carries the canonical user-prefixed URL —
+        # use that as authoritative source for username.
+        user = post.get("user") or ""
+        og_url = og.get("og:url") or ""
+        m_url = OG_POST_URL_RE.search(og_url)
+        if m_url and not user:
+            user = m_url.group("user")
+        # post_type from path or og:url
+        post_type = "reel" if path == "reel" else "post"
+        if m_url:
+            post_type = "reel" if m_url.group("path") == "reel" else "post"
+
+        # If nothing parsed, treat as failed.
+        if not og.get("og:title") and not og.get("og:description"):
+            return {}
+
+        title = og.get("og:title") or ""
+        caption = post.get("caption") or ""
+        # og:title is usually "<User> on Instagram: \"caption\""
+        if not caption and ": \"" in title:
+            try:
+                caption = title.split(": \"", 1)[1].rstrip("\"")
+            except Exception:
+                pass
+
+        return {
+            "url": url,
+            "shortcode": shortcode,
+            "post_type": post_type,
+            "user": user.lstrip("@"),
+            "user_url": (
+                f"https://www.instagram.com/{user.lstrip('@')}/" if user else ""
+            ),
+            "title": title,
+            "caption": caption,
+            "likes_text": post.get("likes_text", ""),
+            "likes": post.get("likes"),
+            "comments_text": post.get("comments_text", ""),
+            "comments": post.get("comments"),
+            "posted_at": post.get("posted_at", ""),
+            "image_url": og.get("og:image", ""),
+        }
+
+    def _post_meta_to_result(
+        self, data: dict, *, source: str
+    ) -> SearchResult:
+        """Convert the dict from :meth:`_fetch_post_meta` into a SearchResult."""
+        head = []
+        user = data.get("user") or ""
+        if user:
+            head.append(f"@{user}")
+        head.append(data.get("post_type") or "post")
+        if data.get("likes_text"):
+            head.append(f"{data['likes_text']} likes")
+        if data.get("comments_text"):
+            head.append(f"{data['comments_text']} comments")
+        if data.get("posted_at"):
+            head.append(data["posted_at"])
+        snippet = " · ".join(head)
+        if data.get("caption"):
+            snippet = snippet + " — " + data["caption"]
+
+        r = SearchResult(
+            title=(data.get("title") or data.get("caption") or "Instagram post")[:200],
+            url=data.get("url") or "",
+            snippet=snippet[:400],
+        )
+        self._stamp_post_attrs(
+            r,
+            user=user,
+            user_url=data.get("user_url") or "",
+            shortcode=data.get("shortcode") or "",
+            post_type=data.get("post_type") or "post",
+            caption=data.get("caption") or "",
+            likes=data.get("likes"),
+            likes_text=data.get("likes_text") or "",
+            comments=data.get("comments"),
+            comments_text=data.get("comments_text") or "",
+            source=source,
+        )
+        r.posted_at = data.get("posted_at") or ""  # type: ignore[attr-defined]
+        r.image_url = data.get("image_url") or ""  # type: ignore[attr-defined]
+        return r
+
+    def _enrich_results_inplace(self, results: list[SearchResult]) -> None:
+        """For each result without ``likes``, fetch its post page and fill in.
+
+        Mutates the result list. Stops after a single failed fetch returns
+        an empty dict and the next consecutive one too — assumes we got
+        rate-limited if two in a row fail.
+        """
+        consecutive_fail = 0
+        for r in results:
+            if getattr(r, "likes", None) is not None:
+                continue
+            sc = getattr(r, "shortcode", "")
+            pt = getattr(r, "post_type", "post")
+            if not sc:
+                continue
+            data = self._fetch_post_meta("reel" if pt == "reel" else "p", sc)
+            if not data:
+                consecutive_fail += 1
+                if consecutive_fail >= 2:
+                    log.info(
+                        "[instagram] enrichment: 2 consecutive fetches failed, "
+                        "stopping early"
+                    )
+                    break
+                continue
+            consecutive_fail = 0
+            # Fill blanks; never overwrite caller-provided fields.
+            for fld in ("likes", "likes_text", "comments", "comments_text",
+                        "posted_at", "image_url"):
+                if not getattr(r, fld, None):
+                    try:
+                        setattr(r, fld, data.get(fld))
+                    except Exception:
+                        pass
+            if not getattr(r, "user", "") and data.get("user"):
+                r.user = data["user"]  # type: ignore[attr-defined]
+                r.user_url = data.get("user_url") or ""  # type: ignore[attr-defined]
+            if not getattr(r, "caption", "") and data.get("caption"):
+                r.caption = data["caption"]  # type: ignore[attr-defined]
+
+    # ----------------------------------------------------- keyword (logged in)
+
+    def _search_logged_in_keyword(
+        self, query: str, limit: int, *, enrich: bool = False,
+    ) -> list[SearchResult]:
+        """Drive Instagram's logged-in ``/explore/search/keyword/?q=...``.
+
+        When the engine is running anonymously this just falls through to
+        the hashtag path with a clear ``last_status`` note. When the page
+        was launched with a persistent profile that already contains the
+        ``sessionid`` cookie, the SPA renders Top / Accounts / Tags /
+        Places sections — we walk every anchor that looks like
+        ``/<user>/`` or ``/p/<sc>/`` and emit corresponding results.
+        """
+        # Warm-up.
+        if safe_goto(self.page, self.HOMEPAGE_URL, timeout=20000, retries=1):
+            human_delay(0.8, 1.6)
+            self._dismiss_overlays()
+
+        # Sniff auth state.
+        if self._authed is None:
+            self._authed = self._detect_auth()
+        if not self._authed:
+            self.last_status = {
+                "phase": "keyword",
+                "error": "not_authed",
+                "hint": "run `agentsearch login instagram` first",
+            }
+            log.warning(
+                "[instagram] keyword mode requested but not logged in — "
+                "falling back to hashtag flow"
+            )
+            return self._search_hashtag(query, limit)
+
+        url = self.SEARCH_URL.format(q=urllib.parse.quote(query))
+        log.info("[instagram] keyword search %s", url)
+        if not safe_goto(self.page, url, timeout=30000):
+            self.last_status = {"phase": "keyword", "error": "goto_failed"}
+            return []
+        human_delay(2.0, 3.5)
+        self._dismiss_overlays()
+        if self._is_blocked():
+            return []
+
+        # Walk every anchor and collect users + hashtags + posts.
+        try:
+            anchors = self.page.evaluate(
+                """
+                () => Array.from(document.querySelectorAll('a[href]')).map(a => ({
+                    href: a.getAttribute('href') || '',
+                    text: (a.innerText || a.textContent || '').trim(),
+                }))
+                """
+            ) or []
+        except Exception as e:
+            log.warning("[instagram] keyword anchor scan failed: %s", e)
+            anchors = []
+
+        results: list[SearchResult] = []
+        seen_users: set[str] = set()
+        seen_tags: set[str] = set()
+        seen_posts: set[str] = set()
+
+        for a in anchors:
+            href = a.get("href") or ""
+            text = a.get("text") or ""
+            # Posts.
+            mp = POST_HREF_RE.match(href)
+            if mp:
+                sc = mp.group(2)
+                if sc in seen_posts:
+                    continue
+                seen_posts.add(sc)
+                pt = "reel" if mp.group(1) == "reel" else "post"
+                r = SearchResult(
+                    title=text or f"Instagram {pt}",
+                    url=f"https://www.instagram.com/{mp.group(1)}/{sc}/",
+                    snippet=text,
+                )
+                self._stamp_post_attrs(
+                    r, user="", user_url="", shortcode=sc, post_type=pt,
+                    caption=text, likes=None, likes_text="",
+                    comments=None, comments_text="",
+                    source="instagram_keyword",
+                )
+                results.append(r)
+                continue
+            # Users.
+            mu = USER_HREF_RE.match(href)
+            if mu:
+                user = mu.group(1)
+                if user.lower() in self.RESERVED_USERS or user in seen_users:
+                    continue
+                seen_users.add(user)
+                r = SearchResult(
+                    title=text or f"@{user}",
+                    url=f"https://www.instagram.com/{user}/",
+                    snippet=text,
+                )
+                self._stamp_post_attrs(
+                    r, user=user, user_url=f"https://www.instagram.com/{user}/",
+                    shortcode="", post_type="user",
+                    caption=text, likes=None, likes_text="",
+                    comments=None, comments_text="",
+                    source="instagram_keyword",
+                )
+                results.append(r)
+                continue
+            # Hashtags.
+            if href.startswith("/explore/tags/"):
+                tag = href.rstrip("/").split("/")[-1]
+                if not tag or tag in seen_tags:
+                    continue
+                seen_tags.add(tag)
+                r = SearchResult(
+                    title=text or f"#{tag}",
+                    url=f"https://www.instagram.com/explore/tags/{tag}/",
+                    snippet=text,
+                )
+                self._stamp_post_attrs(
+                    r, user="", user_url="",
+                    shortcode="", post_type="hashtag",
+                    caption=text, likes=None, likes_text="",
+                    comments=None, comments_text="",
+                    source="instagram_keyword",
+                )
+                results.append(r)
+
+            if len(results) >= limit * 2:  # collect a bit extra; trim below
+                break
+
+        results = results[:limit]
+        if enrich:
+            self._enrich_results_inplace(
+                [r for r in results if getattr(r, "shortcode", "")]
+            )
+        self.last_status["mode"] = "keyword"
+        return results
+
+    def _detect_auth(self) -> bool:
+        """Best-effort: are we logged in to Instagram?"""
+        # 1) cookie probe (works on persistent contexts).
+        try:
+            ctx = self.page.context  # type: ignore[attr-defined]
+            cookies = ctx.cookies() or []
+            for c in cookies:
+                name = (c.get("name") or "").lower()
+                domain = (c.get("domain") or "").lower()
+                if "instagram" in domain and name in ("sessionid",):
+                    return True
+        except Exception:
+            pass
+        # 2) DOM probe: navbar Profile link.
+        try:
+            html = self.page.content() or ""
+        except Exception:
+            html = ""
+        return bool(re.search(r'href="/[a-zA-Z0-9_.]+/"\s+aria-label="[^"]*[Pp]rofile', html))
+
+    # ----------------------------------------------------- SERP fallbacks
+
+    def _search_serp_fallbacks(
+        self, query: str, limit: int
+    ) -> list[SearchResult]:
+        """Try Google → DDG ``site:instagram.com`` until we get hits.
+
+        Each SERP path is exercised on the same browser page; safe_goto
+        navigates away from any ``/sorry/`` interstitial. Bing is omitted —
+        live testing shows it returns 0 results for ``site:instagram.com``
+        queries (low IG index density).
+
+        Each SERP-engine instance is forced to ``max_retries=1`` so the
+        whole chain caps at ~30-45s instead of ~3min.
+        """
+        out: list[SearchResult] = []
+        last_error: dict | None = None
+        for cls in (GoogleEngine, DuckDuckGoEngine):
+            engine_name = getattr(cls, "name", cls.__name__)
+            log.info("[instagram] SERP fallback: %s", engine_name)
+            try:
+                got = self._search_via_serp(cls, query, limit)
+            except Exception as e:
+                log.warning("[instagram] SERP %s raised: %s", engine_name, e)
+                continue
+            if got:
+                self.last_status["mode"] = f"serp_{engine_name}"
+                return got
+            try:
+                last_error = {
+                    "engine": engine_name,
+                    "url": self.page.url,
+                }
+            except Exception:
+                last_error = {"engine": engine_name}
+        if last_error:
+            self.last_status["serp_last"] = last_error
+        return out
+
+    def _search_via_serp(
+        self, engine_cls, query: str, limit: int,
+    ) -> list[SearchResult]:
+        """Run a single SERP engine instance for ``site:instagram.com``.
+
+        Uses an engine-specific query syntax: Google supports
+        ``(inurl:/p/ OR inurl:/reel/)`` to bias toward post pages, but
+        DuckDuckGo treats parenthesised operators as literals — we drop
+        the ``inurl:`` clause for it and rely on the URL-shape filter
+        instead.
+        """
+        try:
+            serp = engine_cls(self.page)
+            # Cap retries — we're already in a fallback chain.
+            serp.max_retries = 1
+        except Exception as e:
+            log.warning(
+                "[instagram] cannot construct %s: %s", engine_cls.__name__, e
+            )
+            return []
+
+        engine_name = getattr(engine_cls, "name", engine_cls.__name__)
         tag = _hashtagify(query)
-        google_query_terms: list[str] = ["site:instagram.com"]
-        google_query_terms.append("(inurl:/p/ OR inurl:/reel/)")
+        terms = ["site:instagram.com"]
+        # Google understands the ``inurl:`` operator inside grouped OR;
+        # DDG/Bing treat the whole parenthesised expression as a phrase.
+        if engine_name == "google":
+            terms.append("(inurl:/p/ OR inurl:/reel/)")
         if tag:
-            google_query_terms.append(f"#{tag}")
+            terms.append(f"#{tag}")
         else:
-            google_query_terms.append(query)
-        google_query = " ".join(google_query_terms)
+            terms.append(query)
+        serp_query = " ".join(terms)
 
         try:
-            google_results = google.search(google_query, limit=max(limit * 3, 20))
+            organics = serp.search(serp_query, limit=max(limit * 3, 20))
         except Exception as e:
-            log.warning("[instagram] google fallback raised: %s", e)
-            google_results = []
+            log.warning(
+                "[instagram] %s.search raised: %s", engine_cls.__name__, e
+            )
+            organics = []
 
         log.info(
-            "[instagram] google returned %d organic results for %r",
-            len(google_results), google_query,
+            "[instagram] %s returned %d hits for %r",
+            engine_cls.__name__, len(organics), serp_query,
         )
-        self.last_status.setdefault("phase", "google")
-        self.last_status["google_status"] = getattr(google, "last_status", {})
 
-        # Strategy 1: filter Google's structured results.
+        # Strategy 1: filter SERP-engine's structured results.
         candidates: list[dict] = []
-        for r in google_results:
-            entry = self._parse_google_url(r.url or "", title=r.title or "",
-                                           snippet=r.snippet or "")
+        for r in organics:
+            entry = self._parse_serp_url(r.url or "", title=r.title or "",
+                                         snippet=r.snippet or "")
             if entry:
                 candidates.append(entry)
 
-        # Strategy 2: scan all anchors on the Google results page for
-        # Instagram URLs the structured extractor might have skipped.
+        # Strategy 2: scan all anchors on the page (catches result variants
+        # the structured extractor missed — Bing's /ck/a links, Google's
+        # carousel cards, etc.).
         try:
             anchors = self.page.evaluate(
                 """
@@ -393,15 +1145,11 @@ class InstagramEngine(BaseEngine):
             anchors = []
 
         for a in anchors:
-            entry = self._parse_google_url(
+            entry = self._parse_serp_url(
                 a.get("href", ""), title=a.get("text", "") or "", snippet=""
             )
             if entry:
                 candidates.append(entry)
-
-        log.info(
-            "[instagram] google fallback total candidates: %d", len(candidates)
-        )
 
         results: list[SearchResult] = []
         seen: set[str] = set()
@@ -415,45 +1163,66 @@ class InstagramEngine(BaseEngine):
             canonical_url = (
                 f"https://www.instagram.com/{c['path']}/{shortcode}/"
             )
-            # Try to extract the username from the snippet ("@username on
-            # Instagram: ..." is the Open Graph title format Google shows).
             snippet_in = c["snippet"]
             title_in = c["title"]
-            user = ""
-            for source in (title_in, snippet_in):
-                m_user = re.search(r"@([A-Za-z0-9_.]{2,30})", source)
-                if m_user:
-                    user = m_user.group(1)
-                    break
-            user_url = (
-                f"https://www.instagram.com/{user}/" if user else ""
-            )
 
-            title = title_in or (
-                f"@{user} on Instagram" if user else f"Instagram {post_type}"
-            )
+            # Bonus: SERP snippets often verbatim-quote the IG og:description,
+            # which means we can parse likes/comments/posted_at out of them
+            # without an extra round-trip. Try the title first (sometimes it
+            # carries the full og:title), then the snippet body.
+            og_parsed: dict = {}
+            for s in (title_in, snippet_in):
+                p = _parse_og_post_description(s or "")
+                if p and (
+                    p.get("likes") is not None
+                    or p.get("comments") is not None
+                    or p.get("posted_at")
+                ):
+                    og_parsed = p
+                    break
+
+            # Username extraction priority: og parse → text/snippet @-mention.
+            user = og_parsed.get("user") or ""
+            if not user:
+                for source in (title_in, snippet_in):
+                    m_user = re.search(r"@([A-Za-z0-9_.]{2,30})", source)
+                    if m_user:
+                        user = m_user.group(1)
+                        break
+            user_url = f"https://www.instagram.com/{user}/" if user else ""
 
             head_bits: list[str] = []
             if user:
                 head_bits.append(f"@{user}")
             head_bits.append(post_type)
+            if og_parsed.get("likes_text"):
+                head_bits.append(f"{og_parsed['likes_text']} likes")
+            if og_parsed.get("comments_text"):
+                head_bits.append(f"{og_parsed['comments_text']} comments")
+            if og_parsed.get("posted_at"):
+                head_bits.append(og_parsed["posted_at"])
             merged_snippet = " · ".join(head_bits)
-            if snippet_in:
-                merged_snippet = merged_snippet + " — " + snippet_in
+            caption = og_parsed.get("caption") or snippet_in
+            if caption and caption not in merged_snippet:
+                merged_snippet = merged_snippet + " — " + caption
 
             new_r = SearchResult(
-                title=title[:200], url=canonical_url, snippet=merged_snippet[:400]
+                title=(title_in or (f"@{user} on Instagram" if user else f"Instagram {post_type}"))[:200],
+                url=canonical_url,
+                snippet=merged_snippet[:400],
             )
-            new_r.user = user                                        # type: ignore[attr-defined]
-            new_r.user_url = user_url                                # type: ignore[attr-defined]
-            new_r.shortcode = shortcode                              # type: ignore[attr-defined]
-            new_r.post_type = post_type                              # type: ignore[attr-defined]
-            new_r.caption = snippet_in                               # type: ignore[attr-defined]
-            new_r.likes = None                                       # type: ignore[attr-defined]
-            new_r.likes_text = ""                                    # type: ignore[attr-defined]
-            new_r.comments = None                                    # type: ignore[attr-defined]
-            new_r.comments_text = ""                                 # type: ignore[attr-defined]
-            new_r.source = "google"                                  # type: ignore[attr-defined]
+            self._stamp_post_attrs(
+                new_r,
+                user=user, user_url=user_url, shortcode=shortcode,
+                post_type=post_type, caption=caption,
+                likes=og_parsed.get("likes"),
+                likes_text=og_parsed.get("likes_text", ""),
+                comments=og_parsed.get("comments"),
+                comments_text=og_parsed.get("comments_text", ""),
+                source=getattr(engine_cls, "name", engine_cls.__name__),
+            )
+            new_r.posted_at = og_parsed.get("posted_at", "")  # type: ignore[attr-defined]
+            new_r.image_url = ""  # type: ignore[attr-defined]
             results.append(new_r)
             if len(results) >= limit:
                 break
@@ -461,19 +1230,18 @@ class InstagramEngine(BaseEngine):
         return results
 
     @staticmethod
-    def _parse_google_url(
+    def _parse_serp_url(
         url: str, title: str = "", snippet: str = ""
     ) -> dict | None:
-        """Match a Google-result URL against ``ABS_POST_URL_RE``.
+        """Match a SERP-result URL against ``ABS_POST_URL_RE``.
 
-        Also handles Google's ``/url?q=https://www.instagram.com/...``
-        redirect wrapper that survives on some layouts.
+        Handles redirect wrappers used by Google (``/url?q=...``) and
+        Bing (``/ck/a?...&u=<base64>...``).
         """
         if not url:
             return None
-        # Some anchors on the Google results page are still wrapped with the
-        # legacy /url?q= redirect.
-        if "/url?" in url and "instagram.com" in url:
+        # Google /url? wrapper.
+        if "google.com/url" in url:
             try:
                 qs = urllib.parse.urlparse(url).query
                 target = urllib.parse.parse_qs(qs).get("q", [""])[0]
@@ -481,7 +1249,10 @@ class InstagramEngine(BaseEngine):
                     url = target
             except Exception:
                 pass
-        m = ABS_POST_URL_RE.match(url)
+        # Bing /ck/a wrapper. We don't bother base64-decoding here — we
+        # only care if the *href* itself contains the IG URL fragment,
+        # which it sometimes does in plain text.
+        m = ABS_POST_URL_RE.search(url)
         if not m:
             return None
         path = m.group(1)
@@ -493,11 +1264,58 @@ class InstagramEngine(BaseEngine):
             "snippet": snippet,
         }
 
-    # ------------------------------------------------------------ helpers
+    # ----------------------------------------------------- shared helpers
+
+    def _stamp_post_attrs(
+        self,
+        r: SearchResult,
+        *,
+        user: str = "",
+        user_url: str = "",
+        shortcode: str = "",
+        post_type: str = "post",
+        caption: str = "",
+        likes: int | None = None,
+        likes_text: str = "",
+        comments: int | None = None,
+        comments_text: str = "",
+        source: str = "instagram",
+    ) -> None:
+        """Attach the engine-specific attributes to a SearchResult."""
+        r.user = user                       # type: ignore[attr-defined]
+        r.user_url = user_url               # type: ignore[attr-defined]
+        r.shortcode = shortcode             # type: ignore[attr-defined]
+        r.post_type = post_type             # type: ignore[attr-defined]
+        r.caption = caption                 # type: ignore[attr-defined]
+        r.likes = likes                     # type: ignore[attr-defined]
+        r.likes_text = likes_text           # type: ignore[attr-defined]
+        r.comments = comments               # type: ignore[attr-defined]
+        r.comments_text = comments_text     # type: ignore[attr-defined]
+        r.source = source                   # type: ignore[attr-defined]
+
+    def _read_og_meta(self) -> dict[str, str]:
+        """Read every relevant ``<meta property=...>`` / ``<meta name=...>``."""
+        try:
+            return self.page.evaluate(
+                """
+                () => {
+                    const out = {};
+                    const metas = document.querySelectorAll('meta');
+                    for (const m of metas) {
+                        const k = m.getAttribute('property') || m.getAttribute('name') || '';
+                        const v = m.getAttribute('content') || '';
+                        if (k && v && !(k in out)) out[k] = v;
+                    }
+                    return out;
+                }
+                """
+            ) or {}
+        except Exception as e:
+            log.debug("[instagram] og-meta read failed: %s", e)
+            return {}
 
     def _dismiss_overlays(self) -> None:
         """Close login modals, cookie banners, and any other guest overlays."""
-        # 1) Cookie banner first — it's typically loaded outside the modal.
         for sel in COOKIE_BUTTON_SELECTORS:
             try:
                 btn = self.page.query_selector(sel)
@@ -515,7 +1333,6 @@ class InstagramEngine(BaseEngine):
             except Exception:
                 continue
 
-        # 2) Login modal — click the X if present.
         for sel in LOGIN_MODAL_CLOSE_SELECTORS:
             try:
                 btn = self.page.query_selector(sel)
@@ -533,7 +1350,6 @@ class InstagramEngine(BaseEngine):
             except Exception:
                 continue
 
-        # 3) Last resort: press Escape (covers any focus-trapping modal).
         try:
             self.page.keyboard.press("Escape")
         except Exception:
@@ -554,13 +1370,10 @@ class InstagramEngine(BaseEngine):
         except Exception:
             body = ""
 
-        self.last_status = {
-            "url": url,
-            "title": title,
-            "body_len": len(body),
-        }
+        self.last_status["url"] = url
+        self.last_status["title"] = title
+        self.last_status["body_len"] = len(body)
 
-        # Hard redirects to login / challenge.
         if "instagram.com/accounts/login" in url:
             log.warning("[instagram] login redirect: %s", url)
             self.last_status["block_reason"] = "login_redirect"
@@ -570,8 +1383,6 @@ class InstagramEngine(BaseEngine):
             self.last_status["block_reason"] = "challenge"
             return True
 
-        # If the page has *no* post anchors and the body is dominated by
-        # the login prompt, treat as blocked.
         try:
             has_post_anchor = bool(
                 self.page.query_selector('a[href*="/p/"]')
@@ -592,7 +1403,6 @@ class InstagramEngine(BaseEngine):
                 self.last_status["block_reason"] = phrase
                 return True
 
-        # Ratelimit / "please wait a few minutes" page.
         if "please wait a few minutes" in body and not has_post_anchor:
             log.warning("[instagram] ratelimited (please wait a few minutes)")
             self.last_status["block_reason"] = "ratelimit"
@@ -638,7 +1448,6 @@ class InstagramEngine(BaseEngine):
             return True
         except Exception as e:
             log.debug("[instagram] wait_for_function timeout: %s", e)
-        # Manual poll fallback.
         while time.time() < deadline:
             for sel in RESULT_PRESENCE_SELECTORS:
                 try:
@@ -674,23 +1483,6 @@ class InstagramEngine(BaseEngine):
 # then resolves the surrounding card/article to dig out the caption,
 # author handle, and like / comment counts. We do this in JS rather than
 # chained Python selectors to avoid dozens of CDP round-trips per result.
-#
-# Instagram markup conventions used here (resilient to class-name churn):
-#   * Card container : an ancestor ``<article>`` or ``<a>`` with
-#                      ``role="link"`` is the closest reliable anchor in
-#                      both the hashtag grid and the explore grid.
-#   * Caption        : <img alt="..."> on the post image (Instagram puts
-#                      the caption / description in the alt text), the
-#                      anchor's own aria-label, or surrounding span text.
-#   * Author handle  : a sibling <a href="/<user>/"> that is *not* the
-#                      post anchor itself; or a nearby span with the
-#                      handle text. On the hashtag grid the user is not
-#                      always shown — that's fine, ``user`` will be "".
-#   * Like / comment : on the post detail card these are inside spans
-#                      labelled with svg[aria-label="Like"] /
-#                      svg[aria-label="Comment"]; on the grid they are
-#                      under a hover overlay with ♥ / 💬 SVGs and
-#                      "<span>123</span>" siblings.
 _EXTRACT_JS = r"""
 () => {
   const POST_RE = /^\/(p|reel)\/([A-Za-z0-9_-]+)/;
@@ -714,22 +1506,15 @@ _EXTRACT_JS = r"""
 
   const captionFromCard = (card, a) => {
     if (!card) return "";
-    // Instagram puts the post description in <img alt="...">.
     const img = card.querySelector('img[alt]');
     if (img) {
       const alt = (img.getAttribute('alt') || '').trim();
-      // Skip generic "Photo by X" / "Photo shared by X" alt text without
-      // any caption content — those alts don't carry any useful info.
       if (alt && alt.length > 4) return alt;
     }
-    // aria-label on the anchor (used on some layouts).
     const aria = (a.getAttribute('aria-label') || '').trim();
     if (aria && aria.length > 4) return aria;
-    // Inner text of the anchor — typically empty on the grid but useful
-    // on the explore landing page.
     const at = text(a);
     if (at && at.length > 4) return at;
-    // Caption span on the post detail page.
     const cap = card.querySelector('h1, span[dir="auto"], div[dir="auto"]');
     if (cap) {
       const t = text(cap);
@@ -740,8 +1525,6 @@ _EXTRACT_JS = r"""
 
   const userFromCard = (card, postAnchor) => {
     if (!card) return "";
-    // Look for any anchor that points to a profile (one path segment) and
-    // is not the post anchor itself.
     const candidates = card.querySelectorAll('a[href]');
     for (const ca of candidates) {
       if (ca === postAnchor) continue;
@@ -750,8 +1533,6 @@ _EXTRACT_JS = r"""
       if (!m) continue;
       const user = m[1];
       if (RESERVED.has(user.toLowerCase())) continue;
-      // Many user anchors have the handle as their text too — prefer that
-      // when available (cheaper than parsing the href slug).
       const t = text(ca);
       if (t && /^[@A-Za-z0-9_.]{2,32}$/.test(t)) {
         return t.replace(/^@/, '');
@@ -763,23 +1544,18 @@ _EXTRACT_JS = r"""
 
   const countFromLabel = (card, label) => {
     if (!card) return "";
-    // Hover overlay on grid cards — Like / Comment are <li> siblings of
-    // the SVG with the relevant aria-label.
     const svgs = card.querySelectorAll(`svg[aria-label="${label}"]`);
     for (const svg of svgs) {
-      // Walk up to find the sibling that holds the count.
       let p = svg.parentElement;
       while (p && p !== card) {
         const t = text(p);
         if (t) {
-          // First numeric token wins.
           const m = t.match(/\d[\d.,KMBkmb]*/);
           if (m) return m[0];
         }
         p = p.parentElement;
       }
     }
-    // Fallback: look for "<count> likes" / "<count> comments" runs.
     const allText = text(card);
     if (allText) {
       const re = new RegExp(
