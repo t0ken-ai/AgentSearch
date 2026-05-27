@@ -10,6 +10,7 @@ import pkgutil
 import sys
 import time
 from functools import lru_cache
+from typing import Optional
 
 from .core import launch, new_page, BrowserConfig
 
@@ -403,6 +404,131 @@ def cmd_list_engines(args):
             print(f"  ✅ {name}")
         except (ImportError, AttributeError) as e:
             print(f"  ⏳ {name}  ({e})")
+
+
+def cmd_ads_download(args):
+    """Download every image / video URL from an ad-engine JSONL file.
+
+    Each line of the input must be a JSON object shaped like a
+    ``SearchResult.__dict__`` from one of the ad-library engines (i.e.
+    what ``agentsearch search ... --json`` writes for the ``results``
+    field, plus a few extra fields like ``ad_archive_id``,
+    ``video_url``, etc.).
+
+    Examples::
+
+        # Pull and save in two steps
+        agentsearch search shopify -e meta_ad_library --json > shopify.json
+        # Re-shape the results array into JSONL, then download:
+        jq -c '.results[]' shopify.json > shopify.jsonl
+        agentsearch ads-download shopify.jsonl -o ./swipe
+
+        # Or stream from stdin
+        jq -c '.results[]' shopify.json | agentsearch ads-download - -o ./swipe
+    """
+    import json
+
+    in_path = args.input
+    if in_path == "-":
+        records = [json.loads(line) for line in sys.stdin if line.strip()]
+    else:
+        # Two accepted shapes — JSONL (one record per line) and a single
+        # JSON document. We try whole-document first because a single-
+        # line JSON dump would otherwise be mis-parsed as one JSONL row.
+        with open(in_path, "r", encoding="utf-8") as f:
+            raw = f.read()
+        records: list = []
+        try:
+            blob = json.loads(raw)
+            if isinstance(blob, dict) and isinstance(blob.get("results"), list):
+                records = blob["results"]
+            elif isinstance(blob, list):
+                records = blob
+            elif isinstance(blob, dict):
+                # Single-record JSON.
+                records = [blob]
+        except json.JSONDecodeError:
+            # Fall back to JSONL.
+            for line in raw.splitlines():
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    records.append(json.loads(line))
+                except json.JSONDecodeError as e:
+                    logging.warning(
+                        "[ads-download] skipping malformed JSONL line: %s", e,
+                    )
+
+    if not records:
+        print(f"No records loaded from {in_path}", file=sys.stderr)
+        return 1
+
+    from .engines._ad_media import AdMediaDownloader
+    proxy_url = _resolve_proxy_url(args.proxy) if args.proxy else None
+
+    dl = AdMediaDownloader(
+        args.output,
+        proxy_url=proxy_url,
+        timeout=args.timeout,
+        max_retries=args.max_retries,
+    )
+    print(f"Downloading {len(records)} records → {args.output}", file=sys.stderr)
+    if args.workers > 1:
+        results = dl.download_many(
+            records,
+            max_per_record=args.max_per_record,
+            max_workers=args.workers,
+        )
+    else:
+        results = []
+        for rec in records:
+            results.extend(dl.download_record(
+                rec, max_per_record=args.max_per_record,
+            ))
+
+    ok = sum(1 for r in results if r.success)
+    bytes_total = sum(r.file_size or 0 for r in results if r.success)
+    if args.json:
+        print(json.dumps([r.to_dict() for r in results], indent=2))
+    elif not args.quiet:
+        for r in results:
+            tag = "OK " if r.success else "ERR"
+            sz = f"{(r.file_size or 0) / 1024:.1f}K" if r.success else (r.error or "")
+            print(f"{tag} {sz:>10}  {r.local_path or r.url}")
+    print(
+        f"\n  {ok}/{len(results)} files, {bytes_total / 1024 / 1024:.1f} MB total",
+        file=sys.stderr,
+    )
+    return 0 if ok == len(results) else 2
+
+
+def _resolve_proxy_url(spec: Optional[str]) -> Optional[str]:
+    """Resolve a CLI proxy spec into a usable URL.
+
+    Accepts:
+      * Bare URLs (``http://...``, ``socks5://user:pass@host:port``)
+      * ``env`` (or ``env:NAME``) — read from FLUXISP_PROXY (or NAME)
+      * ``pool[:scheme]`` — pick from the rotation pool
+
+    Returns ``None`` when nothing is set so the downloader runs direct.
+    """
+    if not spec:
+        return None
+    if spec.startswith(("http://", "https://", "socks4://", "socks5://")):
+        return spec
+    if spec == "env" or spec.startswith("env:"):
+        var = spec.split(":", 1)[1] if ":" in spec else "FLUXISP_PROXY"
+        return os.environ.get(var)
+    if spec.startswith("pool"):
+        from .proxy import ProxyPool
+        cache = (
+            spec.split(":", 1)[1] if ":" in spec else None
+        ) or None
+        pool = ProxyPool.load_from_cache(path=cache) if cache else ProxyPool.load_from_cache()
+        p = pool.next()
+        return p.url if p else None
+    return spec  # last-resort: treat as a URL the user typed in
 
 
 def cmd_test(args):
@@ -848,6 +974,51 @@ def main():
     # list-engines
     lp = sub.add_parser("list-engines", help="List available engines")
 
+    # ads-download — download every image / video URL from an ad-engine JSONL
+    adp = sub.add_parser(
+        "ads-download",
+        help="Download media (images/videos) from an ad-engine JSONL/JSON file",
+    )
+    adp.add_argument(
+        "input",
+        help="JSONL file (one record per line), JSON dump with .results, "
+             "or '-' to read from stdin",
+    )
+    adp.add_argument(
+        "--output", "-o",
+        default="./ad_media",
+        help="Output directory (default: ./ad_media)",
+    )
+    adp.add_argument(
+        "--proxy",
+        default=os.environ.get("FLUXISP_PROXY"),
+        help="Proxy URL or 'env[:VAR]' or 'pool[:scheme]'. "
+             "Defaults to $FLUXISP_PROXY when set.",
+    )
+    adp.add_argument(
+        "--max-per-record",
+        type=int,
+        default=None,
+        help="Cap downloads per ad (e.g. 1 = pick only the highest-res). "
+             "Default: download all URLs found.",
+    )
+    adp.add_argument(
+        "--workers", type=int, default=4,
+        help="Concurrent downloads (default: 4; use 1 to serialize)",
+    )
+    adp.add_argument(
+        "--timeout", type=int, default=30,
+        help="Per-download timeout in seconds (default: 30)",
+    )
+    adp.add_argument(
+        "--max-retries", type=int, default=2,
+        help="Retries per URL on transport errors (default: 2)",
+    )
+    adp.add_argument("--json", action="store_true",
+                     help="Print results as a JSON array instead of one line per file")
+    adp.add_argument("--quiet", "-q", action="store_true",
+                     help="Suppress per-file lines; print only the summary")
+
     # search-many
     smp = sub.add_parser(
         "search-many",
@@ -993,6 +1164,8 @@ def main():
         sys.exit(cmd_extract(args))
     elif args.command == "list-engines":
         cmd_list_engines(args)
+    elif args.command == "ads-download":
+        sys.exit(cmd_ads_download(args))
     elif args.command == "status":
         sys.exit(cmd_status(args))
     elif args.command == "login":

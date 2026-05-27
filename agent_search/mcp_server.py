@@ -329,6 +329,104 @@ async def list_engines() -> dict[str, Any]:
     }
 
 
+@mcp.tool()
+async def download_ad_media(
+    records: list[dict[str, Any]],
+    output_dir: str = "./ad_media",
+    proxy_url: str | None = None,
+    max_per_record: int | None = None,
+    max_workers: int = 4,
+    timeout: int = 30,
+) -> dict[str, Any]:
+    """Download every image / video URL from a list of ad-engine results.
+
+    Use this **after** calling ``search`` against any ad-library engine
+    (``meta_ad_library``, ``instagram_ad_library``,
+    ``tiktok_creative_center``, ``tiktok_ad_library``,
+    ``google_ad_transparency``). Pass the ``results`` array straight in
+    and every image / video / cover / thumbnail URL it finds will be
+    written to ``output_dir`` with the filename pattern
+    ``{platform}_{ad_id}_{idx:02d}_{kind}.{ext}``.
+
+    The download is fault-tolerant: a 404 / DNS error / proxy hiccup on
+    one URL never breaks the batch; failures land in the response with
+    ``success=False``. Use this to bulk-build a swipe-file folder for
+    competitive analysis or to feed a vision model that needs the
+    actual creative bytes (not just URLs).
+
+    Args:
+        records: A list of ad-record dicts. Accepts the per-result
+            shape returned by ``search`` (``ad_archive_id`` /
+            ``creative_id`` / ``ad_id`` plus ``image_urls`` /
+            ``video_url`` / ``video_urls`` / ``cover_image_url`` /
+            ``creatives[]`` / ``preview_url``). The downloader probes
+            ~10 known field names so all five engines work uniformly.
+        output_dir: Where to drop the files. Created if missing.
+        proxy_url: Optional ``http(s)://[user:pass@]host:port``. When
+            ``None``, an environment variable ``FLUXISP_PROXY`` is
+            consulted as a convenience.
+        max_per_record: Cap downloads per ad. ``1`` ≈ "highest-res only".
+            ``None`` (default) downloads every URL found.
+        max_workers: Concurrent downloads (default 4).
+        timeout: Per-download timeout in seconds (default 30).
+
+    Returns:
+        A dict with::
+
+            {
+              "output_dir":  <str>,
+              "total":       <int>,   # download attempts made
+              "succeeded":   <int>,
+              "failed":      <int>,
+              "bytes":       <int>,   # total bytes written on success
+              "files": [
+                {"url", "local_path", "success", "error",
+                 "file_size", "content_type", "kind",
+                 "ad_id", "platform"},
+                ...
+              ],
+            }
+    """
+    from .engines._ad_media import AdMediaDownloader
+
+    eff_proxy = proxy_url or os.environ.get("FLUXISP_PROXY")
+
+    def _run() -> list[Any]:
+        dl = AdMediaDownloader(
+            output_dir,
+            proxy_url=eff_proxy,
+            timeout=timeout,
+            max_retries=2,
+        )
+        return dl.download_many(
+            records,
+            max_per_record=max_per_record,
+            max_workers=max_workers,
+        )
+
+    try:
+        results = await asyncio.to_thread(_run)
+    except Exception as e:
+        log.exception("[mcp] download_ad_media failed: %s", e)
+        return {
+            "output_dir": output_dir,
+            "total": 0, "succeeded": 0, "failed": 0, "bytes": 0,
+            "files": [],
+            "error": f"{type(e).__name__}: {e}",
+        }
+
+    succeeded = sum(1 for r in results if r.success)
+    bytes_total = sum(r.file_size or 0 for r in results if r.success)
+    return {
+        "output_dir": output_dir,
+        "total": len(results),
+        "succeeded": succeeded,
+        "failed": len(results) - succeeded,
+        "bytes": bytes_total,
+        "files": [r.to_dict() for r in results],
+    }
+
+
 # ----------------------------------------------------------------------- main
 
 
