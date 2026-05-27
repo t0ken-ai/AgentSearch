@@ -105,7 +105,10 @@ install -m 644 \
     "$INSTALL_DIR/deploy/systemd/agentsearch.service" \
     /etc/systemd/system/agentsearch.service
 systemctl daemon-reload
-systemctl enable --now agentsearch.service
+systemctl enable agentsearch.service
+# Always restart so a code update via re-running install.sh actually
+# loads new Python modules — `enable --now` is a no-op when already running.
+systemctl restart agentsearch.service
 
 # ── 7. health probe ────────────────────────────────────────────────────
 echo "==> [7/7] waiting for /health…"
