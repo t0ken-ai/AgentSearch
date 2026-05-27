@@ -48,3 +48,7 @@ search_logs/
 
 # Project specific
 PROGRESS.md
+
+# Internal-only documentation — kept locally but never pushed.
+docs/
+AD_RESEARCH_PLAN.md
