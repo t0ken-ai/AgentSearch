@@ -528,12 +528,13 @@ class MetaAdLibraryEngine(BaseEngine):
                      wait_seconds: float = 12.0) -> list[dict]:
         """Resolve a brand / company name to candidate Facebook page IDs.
 
-        Drives Meta's Ad Library search box with ``query``, intercepts
-        the typeahead RPC, and returns the suggested pages with their
-        canonical IDs. Use the resulting ``page_id`` with
-        ``mode="advertiser"`` (or ``mode="page_url"``) for a precise
-        ad-library query — far more accurate than a free-text keyword
-        search when the brand name is generic.
+        Strategy: run a normal keyword search, then group the resulting
+        ads by ``page_id`` and return one entry per unique advertiser
+        ranked by ad count. This is more robust than driving Meta's
+        typeahead dropdown (which is a React combobox div, not a real
+        input, and frequently rotates DOM classes), and the Facebook
+        ranker is already biased toward the most relevant pages for a
+        query — the top entry is almost always the canonical brand page.
 
         Returns a list of dicts::
 
@@ -541,149 +542,62 @@ class MetaAdLibraryEngine(BaseEngine):
               {"page_id": "...", "page_name": "...",
                "page_profile_uri": "...",
                "page_profile_picture_url": "...",
-               "page_alias": "...",
                "page_like_count": int | None,
                "page_verified": bool | None,
-               "category": "..."},
+               "ad_count": int,        # how many distinct ads this page
+                                       # had in the keyword-search result
+               "categories": [str, ...]},
               ...
             ]
+
+        ``ad_count`` is a strong signal: the canonical "Nike" page often
+        has 200+ ads in a "nike" search, while a knockoff page named
+        "Nike Streetwear" has maybe 2-3.
         """
-        url = (
-            f"https://www.facebook.com/ads/library/"
-            f"?active_status=active&ad_type=all&country={country.upper()}"
-            f"&search_type=keyword_unordered&media_type=all"
+        # Reuse the regular search() so we benefit from all its filters,
+        # dedup, and proxy plumbing.
+        results = self.search(
+            query, limit=max(limit * 8, 80),
+            mode="keyword", country=country, status="active",
         )
+        if not results:
+            self.last_status.setdefault("mode", "lookup_pages")
+            self.last_status["pages_found"] = 0
+            return []
 
-        captured: dict[str, Any] = {"bodies": [], "errors": [],
-                                     "raw_count": 0}
+        # Group by page_id
+        by_page: dict[str, dict] = {}
+        for r in results:
+            d = r.__dict__
+            pid = str(d.get("page_id") or "")
+            if not pid:
+                continue
+            if pid not in by_page:
+                by_page[pid] = {
+                    "page_id": pid,
+                    "page_name": d.get("page_name") or "",
+                    "page_profile_uri": d.get("page_profile_url") or "",
+                    "page_profile_picture_url": d.get(
+                        "page_profile_picture_url") or "",
+                    "page_like_count": d.get("page_like_count"),
+                    "page_verified": d.get("page_verified"),
+                    "categories": d.get("page_categories") or [],
+                    "ad_count": 0,
+                }
+            by_page[pid]["ad_count"] += 1
 
-        def _on_response(resp):
-            if _GRAPHQL_PATH not in resp.url:
-                return
-            try:
-                if resp.request.method != "POST" or resp.status != 200:
-                    return
-                pd = resp.request.post_data or ""
-                params = dict(urllib.parse.parse_qsl(pd))
-                fn = params.get("fb_api_req_friendly_name", "")
-                if fn not in _TYPEAHEAD_FRIENDLY_NAMES:
-                    return
-                body = resp.json()
-                captured["raw_count"] += 1
-                if body.get("errors"):
-                    captured["errors"].append(body["errors"])
-                if body.get("data"):
-                    captured["bodies"].append(body)
-            except Exception as e:
-                log.debug("[meta_ads/typeahead] parse: %s", e)
-
-        self.page.on("response", _on_response)
-        try:
-            log.info("[meta_ads/typeahead] navigating %s", url)
-            if not safe_goto(self.page, url, timeout=45000, retries=1):
-                self.last_status = {"error": "navigation failed",
-                                    "mode": "typeahead"}
-                return []
-
-            # The search input doesn't fire typeahead until we focus +
-            # type. Try a few selectors because Meta rotates classes.
-            self.page.wait_for_timeout(2000)
-            box = None
-            for sel in (
-                'input[type="search"]',
-                'input[role="combobox"]',
-                'input[aria-label*="Search" i]',
-                'input[placeholder*="Search" i]',
-                'input',
-            ):
-                try:
-                    box = self.page.query_selector(sel)
-                    if box and box.is_visible():
-                        break
-                except Exception:
-                    continue
-            if box is None:
-                self.last_status = {"error": "search input not found",
-                                    "mode": "typeahead"}
-                return []
-            try:
-                box.click(timeout=5000)
-                # Type slowly so the typeahead actually fires (instant
-                # fill() sometimes skips the keystroke event).
-                box.type(query, delay=80, timeout=10000)
-            except Exception as e:
-                log.warning("[meta_ads/typeahead] input fill: %s", e)
-                # carry on — RPC may still have fired
-
-            deadline = time.time() + wait_seconds
-            while time.time() < deadline and not captured["bodies"]:
-                self.page.wait_for_timeout(400)
-        finally:
-            try:
-                self.page.remove_listener("response", _on_response)
-            except Exception:
-                pass
-
-        pages = self._collect_typeahead_pages(captured["bodies"])
-        self.last_status = {
-            "mode": "typeahead", "country": country, "query": query,
-            "graphql_calls": captured["raw_count"],
-            "pages_found": len(pages),
-            "errors": len(captured["errors"]),
-        }
+        # Rank by ad_count desc, breaking ties by page_like_count.
+        pages = sorted(
+            by_page.values(),
+            key=lambda p: (
+                -p["ad_count"],
+                -(p.get("page_like_count") or 0),
+                p["page_name"].lower(),
+            ),
+        )
+        self.last_status["pages_found"] = len(pages)
+        self.last_status["mode"] = "lookup_pages"
         return pages[:limit]
-
-    @staticmethod
-    def _collect_typeahead_pages(bodies: list[dict]) -> list[dict]:
-        """Walk every captured typeahead body, dedup by page_id, and
-        return a flat list of page dicts."""
-        out: list[dict] = []
-        seen: set[str] = set()
-        for body in bodies:
-            data = body.get("data") or {}
-            # Three observed shapes — Meta rotates these:
-            for path in [
-                ("ad_library_main", "typeahead_search_results", "page_results"),
-                ("ad_library_main", "typeahead_suggestions"),
-                ("ad_library_main", "search_results_connection", "edges"),
-            ]:
-                node = data
-                for key in path:
-                    node = (node or {}).get(key) or {}
-                if isinstance(node, list):
-                    rows = node
-                elif isinstance(node, dict):
-                    rows = node.get("edges") or []
-                else:
-                    rows = []
-                for row in rows:
-                    if not isinstance(row, dict):
-                        continue
-                    inner = row.get("node") or row
-                    page_id = str(
-                        inner.get("page_id") or inner.get("pageID") or ""
-                    )
-                    if not page_id or page_id in seen:
-                        continue
-                    seen.add(page_id)
-                    out.append({
-                        "page_id": page_id,
-                        "page_name": str(inner.get("page_name")
-                                         or inner.get("pageName") or ""),
-                        "page_profile_uri": str(
-                            inner.get("page_profile_uri") or ""
-                        ),
-                        "page_profile_picture_url": str(
-                            inner.get("page_profile_picture_url") or ""
-                        ),
-                        "page_alias": str(inner.get("page_alias") or ""),
-                        "page_like_count": inner.get("page_like_count"),
-                        "page_verified": inner.get("page_is_verified"),
-                        "category": str(inner.get("category") or ""),
-                    })
-                if out:
-                    break  # first matching path wins for this body
-        return out
 
     # ------------------------------------------------------------------ helpers
 

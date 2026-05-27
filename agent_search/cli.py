@@ -503,6 +503,161 @@ def cmd_ads_download(args):
     return 0 if ok == len(results) else 2
 
 
+def cmd_ads_batch(args):
+    """Run ``ads-by-app`` against a batch of App Store URLs.
+
+    Input file is a plain text file with one URL (or app id, or
+    package name) per line. Lines starting with ``#`` and blank lines
+    are skipped. Each app gets its own JSON file in ``--output``,
+    plus a summary file ``index.json`` listing every app and how many
+    ads were found per platform.
+
+    Designed for "weekly competitor sweep" workflows: drop a list of
+    competitor apps in a file, run the batch, get a folder full of
+    structured reports you can diff over time.
+    """
+    import json
+    import time as _t
+    from .engines._app_store import lookup_app
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+
+    in_path = args.input
+    if in_path == "-":
+        lines = sys.stdin.readlines()
+    else:
+        with open(in_path, "r", encoding="utf-8") as f:
+            lines = f.readlines()
+
+    urls = []
+    for raw in lines:
+        s = raw.strip()
+        if not s or s.startswith("#"):
+            continue
+        urls.append(s)
+    if not urls:
+        print(f"error: no URLs found in {in_path!r}", file=sys.stderr)
+        return 1
+
+    out_dir = os.path.abspath(args.output)
+    os.makedirs(out_dir, exist_ok=True)
+    print(f"==> {len(urls)} apps → {out_dir}", file=sys.stderr)
+    print(f"    platforms={args.platform}  precise={args.precise}  "
+          f"strict={'no' if args.no_strict else 'yes'}",
+          file=sys.stderr)
+
+    # Build a fake args namespace per-app, reusing the cmd_ads_by_app
+    # helper functions (which expect args.platform / args.country / ...
+    # / args.filter / args.proxy / args.no_strict / args.precise / etc.).
+    proxy_url = _resolve_proxy_url(args.proxy) if args.proxy else None
+    proxies = ({"https": proxy_url, "http": proxy_url}) if proxy_url else None
+
+    # Run apps sequentially — they each fan out internally, and running
+    # multiple browser fan-outs in parallel through one residential
+    # proxy egress contends badly. Use --workers >1 only when you have
+    # a beefy local + multiple proxy pools.
+    started = _t.time()
+    summaries = []
+    for i, url in enumerate(urls, 1):
+        app_started = _t.time()
+        print(f"\n[{i}/{len(urls)}] {url}", file=sys.stderr)
+
+        # Resolve metadata first so the summary always has a slug,
+        # even when the fan-out fails.
+        meta = lookup_app(url, proxies=proxies,
+                          country=(args.country or "us").lower())
+        if not meta:
+            print(f"  ✗ could not resolve, skipping", file=sys.stderr)
+            summaries.append({"input": url, "error": "lookup_failed"})
+            continue
+
+        slug = (
+            meta.bundle_id.replace(".", "_")
+            or f"{meta.store}_{meta.app_id}"
+        )
+
+        # Run ads-by-app in-process by calling the same plumbing we
+        # already wrote. We do it through a shim: build a per-app
+        # args namespace.
+        from types import SimpleNamespace
+        sub_args = SimpleNamespace(
+            app_url=url, platform=args.platform, country=args.country,
+            limit=args.limit, proxy=args.proxy, filter=list(args.filter or []),
+            no_strict=args.no_strict, precise=args.precise,
+            json=True,
+        )
+        # cmd_ads_by_app prints to stdout in JSON mode — capture that
+        # via redirect, parse, and re-emit to file.
+        import io
+        buf = io.StringIO()
+        old_stdout = sys.stdout
+        rc = 1
+        try:
+            sys.stdout = buf
+            rc = cmd_ads_by_app(sub_args)
+        finally:
+            sys.stdout = old_stdout
+
+        try:
+            payload = json.loads(buf.getvalue())
+        except Exception as e:
+            print(f"  ✗ JSON parse error from cmd_ads_by_app: {e}",
+                  file=sys.stderr)
+            summaries.append({
+                "input": url, "slug": slug, "error": "parse_failed",
+            })
+            continue
+
+        out_path = os.path.join(out_dir, f"{slug}.json")
+        with open(out_path, "w", encoding="utf-8") as f:
+            json.dump(payload, f, indent=2, ensure_ascii=False)
+
+        per_platform = {
+            lbl: stats.get("count", 0)
+            for lbl, stats in (payload.get("by_platform") or {}).items()
+        }
+        elapsed = _t.time() - app_started
+        print(
+            f"  ✓ {meta.title} → {payload.get('count', 0)} ads  "
+            f"({per_platform})  [{elapsed:.0f}s] → {out_path}",
+            file=sys.stderr,
+        )
+        summaries.append({
+            "input": url, "slug": slug,
+            "title": meta.title, "developer": meta.developer_name,
+            "domain": meta.domain, "store": meta.store,
+            "bundle_id": meta.bundle_id, "rating": meta.rating,
+            "rating_count": meta.rating_count,
+            "version": meta.version, "last_updated": meta.last_updated_iso,
+            "total_ads": payload.get("count", 0),
+            "by_platform": per_platform,
+            "json_file": f"{slug}.json",
+            "elapsed_s": round(elapsed, 1),
+        })
+
+    # Index
+    index_path = os.path.join(out_dir, "index.json")
+    total_elapsed = _t.time() - started
+    index = {
+        "generated_at": _t.strftime("%Y-%m-%dT%H:%M:%SZ", _t.gmtime()),
+        "platform_filter": args.platform,
+        "country": args.country,
+        "precise": args.precise,
+        "strict": not args.no_strict,
+        "total_apps": len(urls),
+        "successful": sum(1 for s in summaries if "error" not in s),
+        "elapsed_s": round(total_elapsed, 1),
+        "apps": summaries,
+    }
+    with open(index_path, "w", encoding="utf-8") as f:
+        json.dump(index, f, indent=2, ensure_ascii=False)
+
+    print(file=sys.stderr)
+    print(f"==> done: {index['successful']}/{len(urls)} apps in "
+          f"{total_elapsed:.0f}s", file=sys.stderr)
+    print(f"    summary: {index_path}", file=sys.stderr)
+    return 0 if index["successful"] > 0 else 1
+
+
 def cmd_ads_by_app(args):
     """End-to-end competitor ad research from an App Store URL.
 
@@ -561,12 +716,76 @@ def cmd_ads_by_app(args):
     # 2. Build dispatch plan based on what metadata we got
     platforms = _expand_platforms(args.platform)
     plans = []
+
+    # Optional precise-mode: resolve developer name to a Facebook page_id
+    # via lookup_pages, then query Meta/IG by advertiser instead of by
+    # keyword. More accurate (one canonical page → all its ads) but
+    # adds one extra browser round-trip.
+    fb_page_id: Optional[str] = None
+    if args.precise and meta.developer_name and (
+            "meta" in platforms or "instagram" in platforms):
+        print(f"==> precise mode: resolving '{meta.developer_name}' → "
+              f"Facebook page_id via lookup_pages",
+              file=sys.stderr)
+        try:
+            from .core import launch as _launch, new_page as _np
+            from .engines.meta_ad_library import MetaAdLibraryEngine
+            _b = _launch(_ad_browser_cfg(proxy_url))
+            try:
+                _p = _np(_b)
+                _e = MetaAdLibraryEngine(_p)
+                pages = _e.lookup_pages(
+                    meta.developer_name,
+                    country=args.country or "US",
+                    limit=5,
+                )
+                if pages:
+                    # Prefer a page whose name contains a token from the
+                    # developer name (case-insensitive); fall back to the
+                    # top-ranked page (most ads).
+                    dev_low = meta.developer_name.lower()
+                    tokens = [t.lower().rstrip(".,") for t in
+                              meta.developer_name.split() if len(t) >= 4]
+                    best = None
+                    for p in pages:
+                        pn = p.get("page_name", "").lower()
+                        if any(t in pn for t in tokens):
+                            best = p
+                            break
+                    if not best:
+                        best = pages[0]
+                    fb_page_id = best.get("page_id") or None
+                    print(
+                        f"  → matched page: {best.get('page_name')!r} "
+                        f"(id={fb_page_id}, ad_count={best.get('ad_count')}, "
+                        f"likes={best.get('page_like_count')}, "
+                        f"verified={best.get('page_verified')})",
+                        file=sys.stderr,
+                    )
+                else:
+                    print("  → no candidate pages found; falling back to "
+                          "keyword search", file=sys.stderr)
+            finally:
+                _b.close()
+        except Exception as e:
+            print(f"  → lookup_pages failed: {type(e).__name__}: {e}; "
+                  f"falling back to keyword search",
+                  file=sys.stderr)
+
     if "meta" in platforms and meta.developer_name:
-        plans.append(("meta", lambda: _run_meta_like_query(
-            "meta_ad_library", meta.developer_name, args, proxy_url)))
+        if fb_page_id:
+            plans.append(("meta", lambda pid=fb_page_id: _run_meta_advertiser(
+                "meta_ad_library", pid, args, proxy_url)))
+        else:
+            plans.append(("meta", lambda: _run_meta_like_query(
+                "meta_ad_library", meta.developer_name, args, proxy_url)))
     if "instagram" in platforms and meta.developer_name:
-        plans.append(("instagram", lambda: _run_meta_like_query(
-            "instagram_ad_library", meta.developer_name, args, proxy_url)))
+        if fb_page_id:
+            plans.append(("instagram", lambda pid=fb_page_id: _run_meta_advertiser(
+                "instagram_ad_library", pid, args, proxy_url)))
+        else:
+            plans.append(("instagram", lambda: _run_meta_like_query(
+                "instagram_ad_library", meta.developer_name, args, proxy_url)))
     if "tiktok" in platforms and meta.developer_name:
         plans.append(("tiktok", lambda: _run_tiktok_query(
             meta.developer_name, args, proxy_url)))
@@ -750,6 +969,38 @@ def _run_meta_like_query(engine_name: str, query: str, args, proxy_url) -> dict:
         results = eng.search(query, limit=args.limit or 10,
                              country=args.country or "US",
                              status="active")
+        return {"ok": True,
+                "results": [r.__dict__ for r in (results or [])],
+                "elapsed_s": round(_t.time() - started, 1)}
+    except Exception as e:
+        return {"ok": False, "error": f"{type(e).__name__}: {e}",
+                "results": [], "elapsed_s": round(_t.time() - started, 1)}
+    finally:
+        if browser is not None:
+            try: browser.close()
+            except Exception: pass
+
+
+def _run_meta_advertiser(engine_name: str, page_id: str, args, proxy_url) -> dict:
+    """Query Meta/Instagram by exact Facebook page_id (advertiser mode).
+    Used by ads-by-app --precise after lookup_pages has resolved the
+    canonical Facebook page for the app's developer."""
+    import time as _t
+    from .core import launch, new_page
+    started = _t.time()
+    browser = None
+    try:
+        engine_cls = _get_engine(engine_name)
+        browser = launch(_ad_browser_cfg(proxy_url))
+        page = new_page(browser)
+        eng = engine_cls(page)
+        results = eng.search(
+            f"page_id:{page_id}",
+            limit=args.limit or 10,
+            mode="advertiser",
+            country=args.country or "US",
+            status="active",
+        )
         return {"ok": True,
                 "results": [r.__dict__ for r in (results or [])],
                 "elapsed_s": round(_t.time() - started, 1)}
@@ -1866,7 +2117,41 @@ def main():
                            "from the developer name (Google ATC results "
                            "always pass through — domain mode is already "
                            "exact).")
+    abap.add_argument("--precise", action="store_true",
+                      help="Resolve the developer name to a canonical "
+                           "Facebook page_id first (via lookup_pages), then "
+                           "query Meta/Instagram in advertiser mode. More "
+                           "accurate when the dev name is generic, but adds "
+                           "one extra browser round-trip (~10s).")
     abap.add_argument("--json", action="store_true", help="Output as JSON")
+
+    # ads-batch — run ads-by-app over a list of competitor apps
+    abp = sub.add_parser(
+        "ads-batch",
+        help="Run ads-by-app over a file of App Store URLs (one per line)",
+    )
+    abp.add_argument("input",
+                     help="Text file with one App Store URL / app id / "
+                          "package name per line ('-' for stdin). Blank "
+                          "lines and #comments are skipped.")
+    abp.add_argument("--output", "-o", default="./ad_intel",
+                     help="Output directory; one <slug>.json per app + an "
+                          "index.json summary (default: ./ad_intel)")
+    abp.add_argument("--platform", "-p", default="all",
+                     help="Same as ads-by-app --platform (default: all)")
+    abp.add_argument("--country", "-c", default="US",
+                     help="ISO-3166 alpha-2 (default US)")
+    abp.add_argument("--limit", "-n", type=int, default=20,
+                     help="Max ads per app (default: 20)")
+    abp.add_argument("--proxy", default=os.environ.get("FLUXISP_PROXY"),
+                     help="Proxy URL or 'env[:VAR]' or 'pool[:scheme]'")
+    abp.add_argument("--filter", "-f", action="append", default=[],
+                     help="Same filter syntax as `ads --filter`")
+    abp.add_argument("--no-strict", action="store_true",
+                     help="Disable strict advertiser filter (see ads-by-app --no-strict)")
+    abp.add_argument("--precise", action="store_true",
+                     help="Resolve dev name → canonical Facebook page_id "
+                          "first (see ads-by-app --precise)")
 
     # ads-download — download every image / video URL from an ad-engine JSONL
     adp = sub.add_parser(
@@ -2062,6 +2347,8 @@ def main():
         sys.exit(cmd_ads(args))
     elif args.command == "ads-by-app":
         sys.exit(cmd_ads_by_app(args))
+    elif args.command == "ads-batch":
+        sys.exit(cmd_ads_batch(args))
     elif args.command == "ads-download":
         sys.exit(cmd_ads_download(args))
     elif args.command == "status":
