@@ -31,6 +31,44 @@ from typing import Optional
 log = logging.getLogger(__name__)
 
 
+# Match free-text mailto / e-mail patterns embedded in app
+# descriptions ("Contact: support@example.com" / "mailto:..." etc.).
+_EMAIL_RE = re.compile(
+    r"(?:mailto:)?([a-zA-Z0-9._+-]{2,}@[a-zA-Z0-9-]+\.[a-zA-Z0-9.-]{2,})"
+)
+# Best-effort privacy / terms URL extractor against descriptions and
+# raw HTML alike. Captures URLs ending in or containing "privacy" /
+# "privacy-policy" / "tos" / "terms".
+_PRIVACY_URL_RE = re.compile(
+    r"(https?://[^\s\"<>)]+?(?:privacy|privacy[-_]?policy|policies)[^\s\"<>)]*)",
+    re.IGNORECASE,
+)
+_TERMS_URL_RE = re.compile(
+    r"(https?://[^\s\"<>)]+?(?:terms|tos|eula)[^\s\"<>)]*)",
+    re.IGNORECASE,
+)
+
+
+def _extract_contact_links(text: str) -> dict:
+    """Pick the most plausible support email / privacy URL / terms URL
+    out of arbitrary text (typically an app description or release-
+    notes blob).
+
+    Returns a dict with keys ``support_email``, ``privacy_url``,
+    ``terms_url`` — empty strings when nothing matched.
+    """
+    if not text:
+        return {"support_email": "", "privacy_url": "", "terms_url": ""}
+    em = _EMAIL_RE.search(text)
+    pr = _PRIVACY_URL_RE.search(text)
+    tr = _TERMS_URL_RE.search(text)
+    return {
+        "support_email": em.group(1) if em else "",
+        "privacy_url":   pr.group(1).rstrip(".,;)") if pr else "",
+        "terms_url":     tr.group(1).rstrip(".,;)") if tr else "",
+    }
+
+
 def _request_with_retry(callable_fn, *, max_retries: int = 2,
                         backoff_base: float = 1.0):
     """Call ``callable_fn()`` with retries on transient transport errors.
@@ -123,6 +161,14 @@ class AppMetadata:
     developer_website: str = ""    # Distinct from `website` for Apple
     privacy_url: str = ""
 
+    # ── Contact / legal links (best-effort extraction) ───────────
+    support_url: str = ""          # Developer support page
+    support_email: str = ""        # mailto: address (often in
+                                   # description / Google Play card)
+    terms_url: str = ""            # ToS / EULA URL
+    eu_dsa_contact: str = ""       # EU Digital Services Act trader info,
+                                   # Google Play exposes for some apps
+
     raw: dict = field(default_factory=dict)
 
     def to_dict(self) -> dict:
@@ -153,6 +199,10 @@ class AppMetadata:
             "release_notes": self.release_notes,
             "developer_website": self.developer_website,
             "privacy_url": self.privacy_url,
+            "support_url": self.support_url,
+            "support_email": self.support_email,
+            "terms_url": self.terms_url,
+            "eu_dsa_contact": self.eu_dsa_contact,
         }
 
 
@@ -251,6 +301,11 @@ def lookup_apple(app_id: str, *, country: str = "us",
     if not screenshots:
         screenshots = list(app.get("ipadScreenshotUrls") or [])
 
+    # Extract contact links from the free-text description (Apple
+    # iTunes API doesn't expose support_email or privacyPolicyUrl as
+    # structured fields, but developers commonly include them inline).
+    contact = _extract_contact_links(desc)
+
     # Date helper: Apple gives ISO 8601 with time; trim to date.
     def _to_date(s: str) -> str:
         if not s:
@@ -290,7 +345,11 @@ def lookup_apple(app_id: str, *, country: str = "us",
                               "in-app-purchases" in (app.get("features") or [])),
         release_notes=str(app.get("releaseNotes") or "")[:1000],
         developer_website=str(app.get("sellerUrl") or ""),
-        privacy_url="",
+        privacy_url=contact["privacy_url"],
+        support_url=str(app.get("supportUrl") or app.get("artistViewUrl") or ""),
+        support_email=contact["support_email"],
+        terms_url=contact["terms_url"],
+        eu_dsa_contact="",
         raw=app,
     )
 
@@ -428,6 +487,36 @@ def lookup_google(package: str, *, hl: str = "en",
             except ValueError:
                 pass
 
+    # Contact / legal — Google Play exposes these reliably in HTML.
+    #   - mailto: appears in the "Developer contact" card
+    #   - privacy URL appears as a labeled link to a Google redirect
+    #     (we unwrap google.com/url?q=... to the real URL)
+    em_match = re.search(r'mailto:([a-zA-Z0-9._+\-]+@[a-zA-Z0-9.\-]+)', html)
+    support_email = em_match.group(1).strip() if em_match else ""
+
+    # Privacy URL: Google wraps developer external URLs through a
+    # google.com/url?q= redirect. Look for the unwrapped real URL.
+    privacy_url = ""
+    for m in re.finditer(
+        r'href="(?:https?://www\.google\.com/url\?q=)?(https?://[^"&]+(?:privacy|policies|policy)[^"&]*)',
+        html, re.IGNORECASE,
+    ):
+        cand = m.group(1)
+        if "google.com/policies" in cand or "policies.google.com" in cand:
+            continue   # Google's own footer link
+        # Unescape \\u003d and similar Google-encoded entities.
+        cand = cand.replace("\\u003d", "=").replace("\\u0026", "&")
+        privacy_url = cand
+        break
+
+    # If we still don't have one, try inside description text as a
+    # fallback (some apps just paste the URL into their listing).
+    if not privacy_url and description:
+        contact = _extract_contact_links(description)
+        privacy_url = contact["privacy_url"]
+        if not support_email:
+            support_email = contact["support_email"]
+
     return AppMetadata(
         store="google",
         app_id=package,
@@ -447,6 +536,11 @@ def lookup_google(package: str, *, hl: str = "en",
         price_str=price_str,
         currency=currency,
         rating_count=rating_count,
+        privacy_url=privacy_url,
+        support_url=website,    # Play uses dev's own site as support URL
+        support_email=support_email,
+        terms_url="",
+        eu_dsa_contact="",
         raw={"html_size": len(html)},
     )
 
@@ -454,6 +548,228 @@ def lookup_google(package: str, *, hl: str = "en",
 # ---------------------------------------------------------------------------
 # Combined entry point
 # ---------------------------------------------------------------------------
+
+
+def search_apple(query: str, *, country: str = "us",
+                 limit: int = 25, entity: str = "software",
+                 proxies: Optional[dict] = None,
+                 timeout: int = 20,
+                 max_retries: int = 2) -> list[AppMetadata]:
+    """Keyword search across the Apple App Store.
+
+    Backed by the public ``itunes.apple.com/search`` endpoint. Returns
+    a list of :class:`AppMetadata` instances populated to the same
+    depth as :func:`lookup_apple` (the search endpoint already returns
+    the full app payload so no second round-trip is needed).
+
+    Args:
+        query:   Search terms (e.g. "shopify", "fitness tracker").
+        country: Storefront ISO code (us / gb / jp / kr / ...).
+        limit:   Max results (Apple caps at 200).
+        entity:  ``software`` (iPhone) / ``iPadSoftware`` /
+                 ``macSoftware`` / ``softwareDeveloper``.
+        proxies: Optional ``requests`` proxy dict.
+    """
+    import requests
+
+    if not query:
+        return []
+    session = requests.Session()
+    if proxies:
+        session.proxies.update(proxies)
+
+    def _fetch():
+        return session.get(
+            "https://itunes.apple.com/search",
+            params={
+                "term": query,
+                "country": country.lower(),
+                "entity": entity,
+                "limit": min(max(int(limit), 1), 200),
+            },
+            timeout=timeout,
+        )
+
+    try:
+        r = _request_with_retry(_fetch, max_retries=max_retries)
+        r.raise_for_status()
+        data = r.json()
+    except Exception as e:
+        log.warning("[app_store] apple search %r failed: %s", query, e)
+        return []
+
+    out: list[AppMetadata] = []
+    for app in data.get("results") or []:
+        # Reuse the same field-extraction path as lookup_apple by
+        # round-tripping through it via the cached app dict — but the
+        # search endpoint already returns the same shape, so we can
+        # build the AppMetadata directly to avoid an extra HTTP call.
+        m = _apple_dict_to_metadata(app)
+        if m:
+            out.append(m)
+    return out
+
+
+def _apple_dict_to_metadata(app: dict) -> Optional[AppMetadata]:
+    """Convert one Apple iTunes Search/Lookup result dict into
+    :class:`AppMetadata`. Centralised so :func:`lookup_apple` and
+    :func:`search_apple` stay in sync."""
+    if not isinstance(app, dict) or not app.get("trackId"):
+        return None
+
+    desc = str(app.get("description") or "")
+    icon = (app.get("artworkUrl512") or app.get("artworkUrl100")
+            or app.get("artworkUrl60") or "")
+    screenshots = list(app.get("screenshotUrls") or [])
+    if not screenshots:
+        screenshots = list(app.get("ipadScreenshotUrls") or [])
+    contact = _extract_contact_links(desc)
+
+    def _to_date(s: str) -> str:
+        if not s:
+            return ""
+        return s.split("T", 1)[0]
+
+    return AppMetadata(
+        store="apple",
+        app_id=str(app.get("trackId") or ""),
+        bundle_id=str(app.get("bundleId") or ""),
+        title=str(app.get("trackName") or ""),
+        developer_name=str(app.get("artistName") or ""),
+        seller_name=str(app.get("sellerName") or ""),
+        website=str(app.get("sellerUrl") or ""),
+        domain=_domain_of(app.get("sellerUrl") or ""),
+        category=str(app.get("primaryGenreName") or ""),
+        rating=app.get("averageUserRatingForCurrentVersion") or
+               app.get("averageUserRating"),
+        description=desc,
+        short_description=desc[:200].strip(),
+        icon_url=icon,
+        screenshot_urls=screenshots[:10],
+        price=float(app.get("price") or 0),
+        price_str=str(app.get("formattedPrice") or ""),
+        currency=str(app.get("currency") or ""),
+        rating_count=int(app.get("userRatingCount") or 0),
+        version=str(app.get("version") or ""),
+        release_date_iso=_to_date(app.get("releaseDate") or ""),
+        last_updated_iso=_to_date(app.get("currentVersionReleaseDate") or ""),
+        size_bytes=int(app.get("fileSizeBytes") or 0)
+                   if str(app.get("fileSizeBytes") or "").isdigit() else 0,
+        min_os=str(app.get("minimumOsVersion") or ""),
+        supported_devices=list(app.get("supportedDevices") or [])[:20],
+        languages=list(app.get("languageCodesISO2A") or []),
+        genres=list(app.get("genres") or []),
+        content_rating=str(app.get("contentAdvisoryRating")
+                           or app.get("trackContentRating") or ""),
+        in_app_purchases=bool(app.get("isVppDeviceBasedLicensingEnabled") or
+                              "in-app-purchases" in (app.get("features") or [])),
+        release_notes=str(app.get("releaseNotes") or "")[:1000],
+        developer_website=str(app.get("sellerUrl") or ""),
+        privacy_url=contact["privacy_url"],
+        support_url=str(app.get("supportUrl") or app.get("artistViewUrl") or ""),
+        support_email=contact["support_email"],
+        terms_url=contact["terms_url"],
+        eu_dsa_contact="",
+        raw=app,
+    )
+
+
+def search_google(query: str, *, hl: str = "en",
+                  country: str = "us", limit: int = 25,
+                  proxies: Optional[dict] = None,
+                  timeout: int = 20,
+                  max_retries: int = 2,
+                  fetch_details: bool = True) -> list[AppMetadata]:
+    """Keyword search across Google Play.
+
+    Google Play has no public search API, so this scrapes the public
+    search-results HTML at ``play.google.com/store/search`` and
+    extracts the top-N package ids. By default each package is then
+    looked up via :func:`lookup_google` so the returned objects have
+    full metadata (description / email / privacy URL / icon / ...).
+
+    Set ``fetch_details=False`` to skip the per-app round-trips when
+    you only need the package list (much faster — about ~2s vs
+    ~2s × N).
+    """
+    import requests
+
+    if not query:
+        return []
+    session = requests.Session()
+    if proxies:
+        session.proxies.update(proxies)
+    session.headers.update({
+        "User-Agent": (
+            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+            "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/145 Safari/537.36"
+        ),
+        "Accept-Language": f"{hl},en;q=0.9",
+    })
+
+    def _fetch():
+        return session.get(
+            "https://play.google.com/store/search",
+            params={"q": query, "c": "apps", "hl": hl, "gl": country.upper()},
+            timeout=timeout,
+        )
+
+    try:
+        r = _request_with_retry(_fetch, max_retries=max_retries)
+        r.raise_for_status()
+        html = r.text
+    except Exception as e:
+        log.warning("[app_store] google search %r failed: %s", query, e)
+        return []
+
+    # Pull package ids in order of appearance, dedup preserving order.
+    pkgs: list[str] = []
+    seen: set[str] = set()
+    for m in re.finditer(r"/store/apps/details\?id=([a-zA-Z0-9._]+)", html):
+        pkg = m.group(1)
+        if pkg in seen:
+            continue
+        seen.add(pkg)
+        pkgs.append(pkg)
+        if len(pkgs) >= limit:
+            break
+
+    if not fetch_details:
+        # Build minimal AppMetadata stubs from just the package id.
+        return [
+            AppMetadata(store="google", app_id=p, bundle_id=p)
+            for p in pkgs
+        ]
+
+    out: list[AppMetadata] = []
+    for pkg in pkgs:
+        m = lookup_google(pkg, hl=hl, proxies=proxies,
+                          timeout=timeout, max_retries=max_retries)
+        if m:
+            out.append(m)
+    return out
+
+
+def search_app(query: str, *, store: str = "all",
+               country: str = "us", limit: int = 25,
+               proxies: Optional[dict] = None,
+               fetch_details: bool = True) -> list[AppMetadata]:
+    """Cross-store keyword search.
+
+    ``store="all"`` returns Apple results first (full metadata) then
+    Google Play (slower path; pass ``fetch_details=False`` to skip
+    the per-app HTML round-trips).
+    """
+    s = store.lower()
+    out: list[AppMetadata] = []
+    if s in ("all", "apple", "ios"):
+        out.extend(search_apple(query, country=country, limit=limit,
+                                proxies=proxies))
+    if s in ("all", "google", "android", "play"):
+        out.extend(search_google(query, country=country, limit=limit,
+                                 proxies=proxies,
+                                 fetch_details=fetch_details))
+    return out[:limit] if s == "all" else out
 
 
 def lookup_app(url_or_id: str, *,

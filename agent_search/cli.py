@@ -503,6 +503,91 @@ def cmd_ads_download(args):
     return 0 if ok == len(results) else 2
 
 
+def cmd_app_search(args):
+    """Keyword search across the app stores.
+
+    Apple App Store + Google Play. Returns each match as an
+    :class:`AppMetadata` dict so downstream pipelines can chain into
+    :command:`ads-by-app` (use the bundle/track id from each row).
+
+    Examples::
+
+        # Find every Shopify-themed app on iOS
+        agentsearch app-search "shopify" --store apple --json
+
+        # Cross-store, fast (skips per-app Google Play HTML fetch —
+        # only package ids returned for Google rows)
+        agentsearch app-search "fitness tracker" --store all --fast
+    """
+    import json
+    from .engines._app_store import (
+        search_apple, search_google, search_app,
+    )
+
+    proxy_url = _resolve_proxy_url(args.proxy) if args.proxy else None
+    proxies = ({"https": proxy_url, "http": proxy_url}) if proxy_url else None
+    limit = max(1, args.limit or 25)
+
+    started = time.time()
+    s = (args.store or "all").lower()
+    if s in ("apple", "ios"):
+        results = search_apple(args.query, country=args.country,
+                               limit=limit, proxies=proxies)
+    elif s in ("google", "android", "play"):
+        results = search_google(args.query, country=args.country,
+                                limit=limit, proxies=proxies,
+                                fetch_details=not args.fast)
+    else:
+        results = search_app(args.query, store="all",
+                             country=args.country, limit=limit,
+                             proxies=proxies,
+                             fetch_details=not args.fast)
+    elapsed = time.time() - started
+
+    if not results:
+        print(f"  no results for {args.query!r} on {s} "
+              f"(elapsed {elapsed:.1f}s)", file=sys.stderr)
+        return 1
+
+    # Optional contact-only filter — useful when the goal is to harvest
+    # support emails / privacy URLs for outreach / compliance audits.
+    if args.with_contact:
+        before = len(results)
+        results = [r for r in results
+                   if r.support_email or r.privacy_url or r.website]
+        print(f"  --with-contact: {before} → {len(results)}",
+              file=sys.stderr)
+
+    payload = {
+        "query": args.query,
+        "store": s,
+        "country": args.country,
+        "count": len(results),
+        "elapsed_s": round(elapsed, 1),
+        "results": [m.to_dict() for m in results],
+    }
+
+    if args.json:
+        print(json.dumps(payload, indent=2, ensure_ascii=False))
+    else:
+        print(f"  {len(results)} apps for {args.query!r} on {s} "
+              f"(elapsed {elapsed:.1f}s)", file=sys.stderr)
+        print(file=sys.stderr)
+        for m in results:
+            print(
+                f"  [{m.store:<6}] {m.title[:40]:<40} "
+                f"by {(m.developer_name or '')[:25]:<25} "
+                f"id={m.app_id:<12}  rating={m.rating or ''}"
+            )
+            if m.website or m.support_email or m.privacy_url:
+                bits = []
+                if m.website:        bits.append(f"web={m.website}")
+                if m.support_email:  bits.append(f"email={m.support_email}")
+                if m.privacy_url:    bits.append(f"privacy={m.privacy_url[:60]}")
+                print(f"           " + "  ".join(bits))
+    return 0
+
+
 def cmd_ads_batch(args):
     """Run ``ads-by-app`` against a batch of App Store URLs.
 
@@ -2260,6 +2345,29 @@ def main():
                      help="Resolve dev name → canonical Facebook page_id "
                           "first (see ads-by-app --precise)")
 
+    # app-search — keyword search across Apple / Google Play
+    aspx = sub.add_parser(
+        "app-search",
+        help="Keyword search across Apple App Store + Google Play",
+    )
+    aspx.add_argument("query", help="Search keywords (e.g. 'shopify', 'fitness tracker')")
+    aspx.add_argument("--store", default="all",
+                      help="apple / google / all (default: all). "
+                           "Aliases: ios=apple, android/play=google.")
+    aspx.add_argument("--country", "-c", default="us",
+                      help="ISO-3166 alpha-2 (default: us)")
+    aspx.add_argument("--limit", "-n", type=int, default=10,
+                      help="Max results (default: 10; Apple caps at 200)")
+    aspx.add_argument("--fast", action="store_true",
+                      help="Skip per-app HTML fetch on Google Play "
+                           "(faster, but only package ids returned)")
+    aspx.add_argument("--with-contact", action="store_true",
+                      help="Filter to apps that expose at least one "
+                           "of: website / support_email / privacy_url")
+    aspx.add_argument("--proxy", default=os.environ.get("FLUXISP_PROXY"),
+                      help="Proxy URL (default: $FLUXISP_PROXY if set)")
+    aspx.add_argument("--json", action="store_true", help="Output as JSON")
+
     # ads-download — download every image / video URL from an ad-engine JSONL
     adp = sub.add_parser(
         "ads-download",
@@ -2456,6 +2564,8 @@ def main():
         sys.exit(cmd_ads_by_app(args))
     elif args.command == "ads-batch":
         sys.exit(cmd_ads_batch(args))
+    elif args.command == "app-search":
+        sys.exit(cmd_app_search(args))
     elif args.command == "ads-download":
         sys.exit(cmd_ads_download(args))
     elif args.command == "status":
