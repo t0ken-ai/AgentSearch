@@ -393,6 +393,49 @@ def _unknown_mode() -> int:
     return 1
 
 
+def _redirect_detector() -> int:
+    """_looks_like_login_redirect should fire on TikTok's new
+    login-guarded /creative/creativeCenter/trends destination."""
+    from agent_search.engines.tiktok_creative_center import (
+        _looks_like_login_redirect,
+    )
+    fail = 0
+    cases = [
+        # (current_url, original_url, expected)
+        (
+            "https://ads.tiktok.com/creative/creativeCenter/trends?period=7&region=US",
+            "https://ads.tiktok.com/business/creativecenter/inspiration/popular/hashtag/pc/en?period=7&region=US",
+            True,
+        ),
+        (
+            "https://ads.tiktok.com/creative/creativeCenter?period=7",
+            "https://ads.tiktok.com/business/creativecenter/keyword-insights/pc/en",
+            True,
+        ),
+        # Same URL → no redirect
+        (
+            "https://ads.tiktok.com/business/creativecenter/inspiration/topads/pc/en",
+            "https://ads.tiktok.com/business/creativecenter/inspiration/topads/pc/en",
+            False,
+        ),
+        # Different page that isn't a known login guard → no redirect
+        (
+            "https://ads.tiktok.com/business/creativecenter/somewhere/else",
+            "https://ads.tiktok.com/business/creativecenter/inspiration/topads/pc/en",
+            False,
+        ),
+        ("", "anything", False),
+    ]
+    for cur, orig, expected in cases:
+        got = _looks_like_login_redirect(cur, orig)
+        if got != expected:
+            print(f"  FAIL: redirect({cur!r}, {orig!r}) = {got}, expected {expected}")
+            fail += 1
+    if fail == 0:
+        print("  PASS: redirect detector")
+    return fail
+
+
 # ── Original live test (network-bound) ────────────────────────────────
 
 
@@ -438,6 +481,7 @@ def main() -> int:
         ("row_trending_creators", _row_to_result_trending_creators),
         ("validation_required",   _validation_required_params),
         ("unknown_mode",          _unknown_mode),
+        ("redirect_detector",     _redirect_detector),
         ("live_top_ads",          _run_top_ads_live),
     ]:
         print(f"\n[{label}]")

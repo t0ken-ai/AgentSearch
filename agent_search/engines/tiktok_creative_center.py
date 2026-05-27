@@ -287,6 +287,27 @@ _PUBLIC_MODES = frozenset({
 })
 
 
+# URL substrings that indicate the page redirected to a login-guarded
+# landing instead of serving data. Verified 2026-05-27: all of TikTok's
+# trending/keyword/insights URLs now redirect here when the visitor
+# isn't authenticated (the destination page calls
+# ``/CreativeOne/Client/ClientGetAccountInfo`` and stops short of
+# firing the data RPCs when login is missing).
+_LOGIN_GUARDED_REDIRECT_FRAGMENTS = (
+    "/creative/creativeCenter/trends",
+    "/creative/creativeCenter?",
+    "/creative/creativeCenter/login",
+)
+
+
+def _looks_like_login_redirect(current_url: str, original_url: str) -> bool:
+    """Return True when navigation landed on a login-guarded page that
+    doesn't fire the data RPC we want to intercept."""
+    if not current_url or current_url == original_url:
+        return False
+    return any(f in current_url for f in _LOGIN_GUARDED_REDIRECT_FRAGMENTS)
+
+
 # ---------------------------------------------------------------------------
 # Engine
 # ---------------------------------------------------------------------------
@@ -455,15 +476,35 @@ class TikTokCreativeCenterEngine(BaseEngine):
                 captured["err"] = str(e)
 
         self.page.on("response", _on_response)
+        redirected_to_login = False
         try:
             log.info("[ttcc/%s] navigating %s", m, url)
             if not safe_goto(self.page, url, timeout=30000, retries=1):
                 self.last_status["error"] = "navigation failed"
                 return []
 
-            deadline = time.time() + wait_seconds
-            while time.time() < deadline and captured["body"] is None:
-                self.page.wait_for_timeout(500)
+            # Fast-fail: TikTok started redirecting all trending /
+            # keyword / insights URLs to /creative/creativeCenter/trends
+            # which is login-guarded. If we land there, the data RPC we
+            # want to intercept will never fire — bail in 1s instead of
+            # waiting the full 25s.
+            self.page.wait_for_timeout(1000)
+            try:
+                landed = self.page.url or ""
+            except Exception:
+                landed = ""
+            redirected_to_login = _looks_like_login_redirect(landed, url)
+            if redirected_to_login:
+                log.info(
+                    "[ttcc/%s] redirected to login-guarded page %s; "
+                    "stopping wait loop",
+                    m, landed,
+                )
+                self.last_status["redirected_to"] = landed
+            else:
+                deadline = time.time() + wait_seconds
+                while time.time() < deadline and captured["body"] is None:
+                    self.page.wait_for_timeout(500)
         finally:
             try:
                 self.page.remove_listener("response", _on_response)
@@ -472,6 +513,14 @@ class TikTokCreativeCenterEngine(BaseEngine):
 
         if captured["body"] is None:
             err = captured.get("err") or "no response captured"
+            if redirected_to_login:
+                err = (
+                    f"redirected to {self.last_status.get('redirected_to')} — "
+                    f"TikTok now login-guards the trending / keyword / "
+                    f"insights surface. The destination page renders the "
+                    f"shell but skips the data RPC unless ClientGetAccountInfo "
+                    f"says the visitor is logged in."
+                )
             if m in _AUTH_REQUIRED_MODES:
                 err += (
                     f" — mode={m!r} requires an authenticated "
