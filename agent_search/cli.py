@@ -650,6 +650,42 @@ def cmd_ads_by_app(args):
             file=sys.stderr,
         )
 
+    # Auto-filter for relevance: keyword searches on Meta/IG/TikTok
+    # match every ad whose copy mentions the developer name, including
+    # unrelated pages that just happen to use the word. Filter the
+    # result set to pages whose advertiser name contains the developer
+    # name. Skip the auto-filter for Google because its domain mode is
+    # already exact, and skip when --no-strict is set.
+    if not args.no_strict and meta.developer_name:
+        # Tokenise: "TikTok Ltd." → require either "tiktok" or "ltd"-
+        # not- a-stopword. Keep tokens >= 4 chars and skip generic
+        # legal-suffix words.
+        stopwords = {"inc", "ltd", "llc", "co", "corp", "the", "and",
+                     "co.,", "ltd.", "inc.", "corp.", "pte", "pte.",
+                     "limited", "company", "group"}
+        tokens = [
+            t.lower().rstrip(".,") for t in meta.developer_name.split()
+            if len(t) >= 4 and t.lower().rstrip(".,") not in stopwords
+        ]
+        if tokens:
+            before = len(flat)
+            kept: list[dict] = []
+            for d in flat:
+                # Always keep Google ATC results — domain mode already
+                # exact-matches.
+                if d.get("platform") == "google_atc":
+                    kept.append(d)
+                    continue
+                hay = (d.get("advertiser_name") or "").lower()
+                if any(t in hay for t in tokens):
+                    kept.append(d)
+            flat = kept
+            print(
+                f"  auto-filter (advertiser_contains any of {tokens}): "
+                f"{before} → {len(flat)} records",
+                file=sys.stderr,
+            )
+
     flat.sort(
         key=lambda d: (d.get("last_seen_iso") or "",
                        d.get("days_running") or 0),
@@ -1822,6 +1858,14 @@ def main():
                            "Defaults to $FLUXISP_PROXY.")
     abap.add_argument("--filter", "-f", action="append", default=[],
                       help="Same filter syntax as `ads --filter`. Repeat for AND.")
+    abap.add_argument("--no-strict", action="store_true",
+                      help="Disable the auto advertiser-name filter that "
+                           "trims keyword-search bleed-through. By default "
+                           "Meta/IG/TikTok results are filtered to ads whose "
+                           "advertiser_name contains a non-stopword token "
+                           "from the developer name (Google ATC results "
+                           "always pass through — domain mode is already "
+                           "exact).")
     abap.add_argument("--json", action="store_true", help="Output as JSON")
 
     # ads-download — download every image / video URL from an ad-engine JSONL

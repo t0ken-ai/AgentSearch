@@ -109,8 +109,33 @@ def t_live_apple_instagram() -> int:
     if m.domain != "instagram.com":
         print(f"  FAIL domain: {m.domain}")
         return 1
-    print(f"  PASS: Apple Instagram lookup ({m.developer_name}, {m.domain})")
-    return 0
+    # Extended-fields sanity: Apple lookups should populate plenty of
+    # detail. Only assert structural — the live values change with
+    # every Instagram release.
+    fail = 0
+    for field_name, predicate in [
+        ("description",      lambda v: isinstance(v, str) and len(v) > 100),
+        ("icon_url",         lambda v: isinstance(v, str) and v.startswith("http")),
+        ("screenshot_urls",  lambda v: isinstance(v, list) and len(v) >= 1),
+        ("rating_count",     lambda v: isinstance(v, int) and v > 0),
+        ("version",          lambda v: isinstance(v, str) and v),
+        ("release_date_iso", lambda v: isinstance(v, str) and v.startswith("20")),
+        ("last_updated_iso", lambda v: isinstance(v, str) and v.startswith("20")),
+        ("size_bytes",       lambda v: isinstance(v, int) and v > 0),
+        ("min_os",           lambda v: isinstance(v, str) and v),
+        ("languages",        lambda v: isinstance(v, list) and len(v) >= 1),
+        ("genres",           lambda v: isinstance(v, list) and "Photo & Video" in v),
+        ("price_str",        lambda v: isinstance(v, str)),
+        ("currency",         lambda v: v == "USD"),
+    ]:
+        if not predicate(getattr(m, field_name)):
+            print(f"  FAIL extended.{field_name}: {getattr(m, field_name)!r}")
+            fail += 1
+    if fail == 0:
+        print(f"  PASS: Apple Instagram lookup ({m.developer_name}, "
+              f"v{m.version}, {m.size_bytes // (1024*1024)}MB, "
+              f"{m.rating_count} ratings)")
+    return fail
 
 
 def t_live_google_shopify() -> int:

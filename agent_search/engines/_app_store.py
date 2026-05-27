@@ -51,6 +51,30 @@ class AppMetadata:
     domain: str = ""            # eTLD+1 of the website (e.g. shopify.com)
     category: str = ""
     rating: float | None = None
+
+    # ── Extended fields for analysis ──────────────────────────────
+    description: str = ""
+    short_description: str = ""    # First 200 chars / subtitle
+    icon_url: str = ""             # Hi-res app icon
+    screenshot_urls: list[str] = field(default_factory=list)
+    price: float = 0.0             # Numeric price (0 = free)
+    price_str: str = ""            # Localized formatted price
+    currency: str = ""
+    rating_count: int = 0          # Total user ratings
+    version: str = ""              # Current version string
+    release_date_iso: str = ""     # First-released date (YYYY-MM-DD)
+    last_updated_iso: str = ""     # Current version release date
+    size_bytes: int = 0
+    min_os: str = ""               # Min OS version (e.g. "14.0")
+    supported_devices: list[str] = field(default_factory=list)
+    languages: list[str] = field(default_factory=list)
+    genres: list[str] = field(default_factory=list)
+    content_rating: str = ""       # "4+", "Everyone", etc.
+    in_app_purchases: bool = False
+    release_notes: str = ""        # Latest version's "what's new"
+    developer_website: str = ""    # Distinct from `website` for Apple
+    privacy_url: str = ""
+
     raw: dict = field(default_factory=dict)
 
     def to_dict(self) -> dict:
@@ -61,6 +85,26 @@ class AppMetadata:
             "seller_name": self.seller_name, "website": self.website,
             "domain": self.domain, "category": self.category,
             "rating": self.rating,
+            "description": self.description,
+            "short_description": self.short_description,
+            "icon_url": self.icon_url,
+            "screenshot_urls": self.screenshot_urls,
+            "price": self.price, "price_str": self.price_str,
+            "currency": self.currency,
+            "rating_count": self.rating_count,
+            "version": self.version,
+            "release_date_iso": self.release_date_iso,
+            "last_updated_iso": self.last_updated_iso,
+            "size_bytes": self.size_bytes,
+            "min_os": self.min_os,
+            "supported_devices": self.supported_devices,
+            "languages": self.languages,
+            "genres": self.genres,
+            "content_rating": self.content_rating,
+            "in_app_purchases": self.in_app_purchases,
+            "release_notes": self.release_notes,
+            "developer_website": self.developer_website,
+            "privacy_url": self.privacy_url,
         }
 
 
@@ -138,6 +182,21 @@ def lookup_apple(app_id: str, *, country: str = "us",
         return None
     app = data["results"][0]
 
+    desc = str(app.get("description") or "")
+    # Hi-res icon: Apple gives 60/100/512 — pick 512.
+    icon = (app.get("artworkUrl512") or app.get("artworkUrl100")
+            or app.get("artworkUrl60") or "")
+    # Screenshots: prefer iPhone, fall back to iPad.
+    screenshots = list(app.get("screenshotUrls") or [])
+    if not screenshots:
+        screenshots = list(app.get("ipadScreenshotUrls") or [])
+
+    # Date helper: Apple gives ISO 8601 with time; trim to date.
+    def _to_date(s: str) -> str:
+        if not s:
+            return ""
+        return s.split("T", 1)[0]
+
     return AppMetadata(
         store="apple",
         app_id=str(app.get("trackId") or app_id),
@@ -150,6 +209,28 @@ def lookup_apple(app_id: str, *, country: str = "us",
         category=str(app.get("primaryGenreName") or ""),
         rating=app.get("averageUserRatingForCurrentVersion") or
                app.get("averageUserRating"),
+        description=desc,
+        short_description=desc[:200].strip(),
+        icon_url=icon,
+        screenshot_urls=screenshots[:10],   # cap so JSON output stays sane
+        price=float(app.get("price") or 0),
+        price_str=str(app.get("formattedPrice") or ""),
+        currency=str(app.get("currency") or ""),
+        rating_count=int(app.get("userRatingCount") or 0),
+        version=str(app.get("version") or ""),
+        release_date_iso=_to_date(app.get("releaseDate") or ""),
+        last_updated_iso=_to_date(app.get("currentVersionReleaseDate") or ""),
+        size_bytes=int(app.get("fileSizeBytes") or 0) if str(app.get("fileSizeBytes") or "").isdigit() else 0,
+        min_os=str(app.get("minimumOsVersion") or ""),
+        supported_devices=list(app.get("supportedDevices") or [])[:20],
+        languages=list(app.get("languageCodesISO2A") or []),
+        genres=list(app.get("genres") or []),
+        content_rating=str(app.get("contentAdvisoryRating") or app.get("trackContentRating") or ""),
+        in_app_purchases=bool(app.get("isVppDeviceBasedLicensingEnabled") or
+                              "in-app-purchases" in (app.get("features") or [])),
+        release_notes=str(app.get("releaseNotes") or "")[:1000],
+        developer_website=str(app.get("sellerUrl") or ""),
+        privacy_url="",
         raw=app,
     )
 
@@ -170,6 +251,20 @@ _GP_TITLE = re.compile(r"<title[^>]*>([^<]+)</title>")
 _GP_REDIRECT = re.compile(
     r'href="https://www\.google\.com/url\?q=(https?[^"&]+)'
 )
+_GP_DESCRIPTION = re.compile(
+    r'<meta\s+name="description"\s+content="([^"]+)"',
+    re.IGNORECASE,
+)
+_GP_ICON = re.compile(
+    r'<meta\s+property="og:image"\s+content="([^"]+)"',
+    re.IGNORECASE,
+)
+# Rating count: Google Play exposes this as a "ratingCount" field
+# in JSON-LD or as visible text like "1,234,567 reviews".
+_GP_RATING_COUNT = re.compile(r'"ratingCount"\s*:\s*(\d+)')
+_GP_RATING_VALUE = re.compile(r'"ratingValue"\s*:\s*([\d.]+)')
+_GP_PRICE = re.compile(r'"price"\s*:\s*"([^"]*)"')
+_GP_CURRENCY = re.compile(r'"priceCurrency"\s*:\s*"([^"]*)"')
 
 
 def lookup_google(package: str, *, hl: str = "en",
@@ -238,6 +333,31 @@ def lookup_google(package: str, *, hl: str = "en",
         if not developer:
             developer = title
 
+    # Extended fields
+    desc_match = _GP_DESCRIPTION.search(html)
+    description = desc_match.group(1).strip() if desc_match else ""
+    icon_match = _GP_ICON.search(html)
+    icon = icon_match.group(1) if icon_match else ""
+
+    rc_match = _GP_RATING_COUNT.search(html)
+    rating_count = int(rc_match.group(1)) if rc_match else 0
+    rv_match = _GP_RATING_VALUE.search(html)
+    rating = float(rv_match.group(1)) if rv_match else None
+
+    price_match = _GP_PRICE.search(html)
+    price_str = price_match.group(1) if price_match else ""
+    cur_match = _GP_CURRENCY.search(html)
+    currency = cur_match.group(1) if cur_match else ""
+    # Numeric price: parse "$2.99" / "0" / ""
+    price = 0.0
+    if price_str:
+        p_clean = re.sub(r"[^\d.]", "", price_str)
+        if p_clean:
+            try:
+                price = float(p_clean)
+            except ValueError:
+                pass
+
     return AppMetadata(
         store="google",
         app_id=package,
@@ -248,7 +368,15 @@ def lookup_google(package: str, *, hl: str = "en",
         website=website,
         domain=_domain_of(website),
         category="",
-        rating=None,
+        rating=rating,
+        description=description,
+        short_description=description[:200].strip(),
+        icon_url=icon,
+        screenshot_urls=[],   # Hard to extract reliably from Play HTML
+        price=price,
+        price_str=price_str,
+        currency=currency,
+        rating_count=rating_count,
         raw={"html_size": len(html)},
     )
 
