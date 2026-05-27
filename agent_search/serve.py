@@ -56,6 +56,23 @@ log = logging.getLogger(__name__)
 RECYCLE_AFTER = int(os.environ.get("AGENTSEARCH_RECYCLE_AFTER", "25"))
 
 
+def _resolve_default_proxy() -> str | None:
+    """Pick a proxy URL from the environment, in priority order.
+
+    Priority:
+        1. AGENTSEARCH_PROXY    explicit per-deployment override
+        2. FLUXISP_PROXY        the residential pool the project ships with
+        3. HTTPS_PROXY          standard Linux convention
+        4. HTTP_PROXY           ditto
+    Returns ``None`` when nothing is set so the browser launches direct.
+    """
+    for var in ("AGENTSEARCH_PROXY", "FLUXISP_PROXY", "HTTPS_PROXY", "HTTP_PROXY"):
+        v = os.environ.get(var)
+        if v:
+            return v
+    return None
+
+
 class BrowserPool:
     def __init__(self) -> None:
         self._browser = None
@@ -73,7 +90,12 @@ class BrowserPool:
                         self._browser.close()
                     except Exception:
                         pass
-                self._browser = launch(BrowserConfig(headless=True, humanize=True, user_data_dir=user_data_dir))
+                self._browser = launch(BrowserConfig(
+                    headless=True,
+                    humanize=True,
+                    user_data_dir=user_data_dir,
+                    proxy=_resolve_default_proxy(),
+                ))
                 self._calls = 0
             self._calls += 1
             return new_page(self._browser)

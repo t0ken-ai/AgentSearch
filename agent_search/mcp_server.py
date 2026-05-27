@@ -55,6 +55,25 @@ RECYCLE_AFTER = int(os.environ.get("AGENTSEARCH_RECYCLE_AFTER", "25"))
 HEADLESS = os.environ.get("AGENTSEARCH_HEADLESS", "1") != "0"
 
 
+def _resolve_default_proxy() -> str | None:
+    """Pick an outbound proxy URL from the environment, in priority order.
+
+    Priority: AGENTSEARCH_PROXY > FLUXISP_PROXY > HTTPS_PROXY > HTTP_PROXY.
+    Returns None when nothing is set so the browser launches direct.
+
+    This matters when the host's IP is a datacenter range (AWS, GCP, ...);
+    Meta / TikTok / Google ad libraries rate-limit or 401 such IPs, so
+    operators usually configure a residential proxy via env var. We pick
+    it up automatically rather than forcing every deployment to also
+    edit the unit / compose file.
+    """
+    for var in ("AGENTSEARCH_PROXY", "FLUXISP_PROXY", "HTTPS_PROXY", "HTTP_PROXY"):
+        v = os.environ.get(var)
+        if v:
+            return v
+    return None
+
+
 class BrowserPool:
     """Lazy, thread-safe singleton browser with periodic recycling.
 
@@ -70,7 +89,11 @@ class BrowserPool:
 
     def _start(self) -> None:
         log.info("[mcp] launching browser (headless=%s)", HEADLESS)
-        self._browser = launch(BrowserConfig(headless=HEADLESS, humanize=True))
+        self._browser = launch(BrowserConfig(
+            headless=HEADLESS,
+            humanize=True,
+            proxy=_resolve_default_proxy(),
+        ))
         self._calls = 0
 
     def _maybe_recycle(self) -> None:
