@@ -503,6 +503,297 @@ def cmd_ads_download(args):
     return 0 if ok == len(results) else 2
 
 
+def cmd_ads_by_app(args):
+    """End-to-end competitor ad research from an App Store URL.
+
+    Workflow::
+
+        App Store URL  →  developer name + website domain
+                         →  ad-library queries:
+                              * Meta / Instagram  ←  query=developer_name
+                              * Google ATC        ←  domain (mode=domain)
+                              * TikTok CC         ←  keyword=developer_name
+                         →  merged AdRecord stream
+
+    Use this when you have a competitor's app and want to know what
+    ads they're running across the major paid platforms.
+    """
+    import json
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+    from .engines._ad_base import to_ad_record
+    from .engines._app_store import lookup_app
+
+    proxy_url = _resolve_proxy_url(args.proxy) if args.proxy else None
+
+    # 1. Look up app metadata
+    print(f"==> Looking up app: {args.app_url}", file=sys.stderr)
+    proxies = {"https": proxy_url, "http": proxy_url} if proxy_url else None
+    meta = lookup_app(
+        args.app_url,
+        proxies=proxies,
+        country=(args.country or "us").lower(),
+    )
+    if not meta:
+        print(
+            f"error: could not resolve {args.app_url!r}. "
+            f"Pass an Apple App Store URL "
+            f"(https://apps.apple.com/.../id<NUM>), a Google Play URL "
+            f"(https://play.google.com/store/apps/details?id=<PKG>), "
+            f"or a bare numeric / package id.",
+            file=sys.stderr,
+        )
+        return 2
+
+    print(
+        f"  store:     {meta.store}\n"
+        f"  title:     {meta.title}\n"
+        f"  developer: {meta.developer_name}\n"
+        f"  website:   {meta.website}\n"
+        f"  domain:    {meta.domain}\n"
+        f"  bundle:    {meta.bundle_id}",
+        file=sys.stderr,
+    )
+    if not meta.developer_name and not meta.domain:
+        print("error: no developer name or domain — nothing to query",
+              file=sys.stderr)
+        return 2
+
+    # 2. Build dispatch plan based on what metadata we got
+    platforms = _expand_platforms(args.platform)
+    plans = []
+    if "meta" in platforms and meta.developer_name:
+        plans.append(("meta", lambda: _run_meta_like_query(
+            "meta_ad_library", meta.developer_name, args, proxy_url)))
+    if "instagram" in platforms and meta.developer_name:
+        plans.append(("instagram", lambda: _run_meta_like_query(
+            "instagram_ad_library", meta.developer_name, args, proxy_url)))
+    if "tiktok" in platforms and meta.developer_name:
+        plans.append(("tiktok", lambda: _run_tiktok_query(
+            meta.developer_name, args, proxy_url)))
+    if "google" in platforms and meta.domain:
+        # Google ATC's domain mode is the *correct* match for an app
+        # store lookup — apps are tightly bound to a website.
+        plans.append(("google", lambda: _run_google_domain(
+            meta.domain, args, proxy_url)))
+
+    if not plans:
+        print("error: no usable platforms after filtering — try "
+              "--platform all or check that the metadata is non-empty.",
+              file=sys.stderr)
+        return 2
+
+    print(f"\n==> Querying {len(plans)} ad engine(s): "
+          f"{[p[0] for p in plans]} (proxy={'on' if proxy_url else 'off'})",
+          file=sys.stderr)
+
+    # 3. Run dispatch (browser engines serial, google raw concurrent)
+    results_by_platform: dict[str, dict] = {}
+    google_first = (
+        proxy_url is not None
+        and any(lbl == "google" for lbl, _ in plans)
+        and len(plans) > 1
+    )
+    if google_first:
+        google_plan = next((fn for lbl, fn in plans if lbl == "google"), None)
+        other_plans = [(lbl, fn) for lbl, fn in plans if lbl != "google"]
+        with ThreadPoolExecutor(max_workers=2) as ex:
+            google_fut = ex.submit(google_plan) if google_plan else None
+            for lbl, fn in other_plans:
+                try:
+                    results_by_platform[lbl] = fn()
+                except Exception as e:
+                    results_by_platform[lbl] = {
+                        "ok": False, "error": f"{type(e).__name__}: {e}",
+                        "results": [],
+                    }
+            if google_fut is not None:
+                try:
+                    results_by_platform["google"] = google_fut.result()
+                except Exception as e:
+                    results_by_platform["google"] = {
+                        "ok": False, "error": f"{type(e).__name__}: {e}",
+                        "results": [],
+                    }
+    else:
+        for lbl, fn in plans:
+            try:
+                results_by_platform[lbl] = fn()
+            except Exception as e:
+                results_by_platform[lbl] = {
+                    "ok": False, "error": f"{type(e).__name__}: {e}",
+                    "results": [],
+                }
+
+    # 4. Normalize, filter, sort
+    flat: list[dict] = []
+    for lbl, payload in results_by_platform.items():
+        for r in payload.get("results") or []:
+            try:
+                rec = to_ad_record(r)
+                d = rec.to_dict()
+                d["_platform_label"] = lbl
+                flat.append(d)
+            except Exception as e:
+                logging.warning("[ads-by-app] normalize %s record failed: %s",
+                                lbl, e)
+
+    if args.filter:
+        try:
+            preds = _parse_ad_filters(args.filter)
+        except ValueError as e:
+            print(f"error: {e}", file=sys.stderr)
+            return 2
+        before = len(flat)
+        flat = [d for d in flat if all(p(d) for p in preds)]
+        print(
+            f"  --filter applied: {before} → {len(flat)} records",
+            file=sys.stderr,
+        )
+
+    flat.sort(
+        key=lambda d: (d.get("last_seen_iso") or "",
+                       d.get("days_running") or 0),
+        reverse=True,
+    )
+    if args.limit and len(flat) > args.limit:
+        flat = flat[:args.limit]
+
+    # 5. Output
+    if args.json:
+        print(json.dumps({
+            "app": meta.to_dict(),
+            "platforms": list(results_by_platform.keys()),
+            "by_platform": {
+                lbl: {
+                    "ok": payload.get("ok", True),
+                    "error": payload.get("error"),
+                    "count": len(payload.get("results") or []),
+                    "elapsed_s": payload.get("elapsed_s"),
+                }
+                for lbl, payload in results_by_platform.items()
+            },
+            "count": len(flat),
+            "results": flat,
+        }, indent=2, ensure_ascii=False))
+    else:
+        print(file=sys.stderr)
+        for lbl, payload in results_by_platform.items():
+            status = "OK" if payload.get("ok", True) else "FAIL"
+            n = len(payload.get("results") or [])
+            elap = payload.get("elapsed_s") or 0
+            err = payload.get("error", "")
+            line = f"  [{lbl:>9}] {status:4}  {n:3} results  {elap:5.1f}s"
+            if err:
+                line += f"  err={err[:80]}"
+            print(line, file=sys.stderr)
+        print(file=sys.stderr)
+        for d in flat:
+            preview = (d.get("copy_text") or "")[:80].replace("\n", " ")
+            print(
+                f"  {d['platform']:<12} "
+                f"{(d['ad_id'] or ''):<22} "
+                f"{(d.get('advertiser_name') or '')[:25]:<25} "
+                f"{d.get('first_seen_iso') or '':<10} → "
+                f"{d.get('last_seen_iso') or '':<10}  "
+                f"{preview}"
+            )
+    return 0 if any(p.get("ok", True) for p in results_by_platform.values()) else 1
+
+
+def _run_meta_like_query(engine_name: str, query: str, args, proxy_url) -> dict:
+    """Same as _run_meta_like but with an explicit query (instead of args.query)."""
+    import time as _t
+    from .core import launch, new_page
+    started = _t.time()
+    browser = None
+    try:
+        engine_cls = _get_engine(engine_name)
+        browser = launch(_ad_browser_cfg(proxy_url))
+        page = new_page(browser)
+        eng = engine_cls(page)
+        results = eng.search(query, limit=args.limit or 10,
+                             country=args.country or "US",
+                             status="active")
+        return {"ok": True,
+                "results": [r.__dict__ for r in (results or [])],
+                "elapsed_s": round(_t.time() - started, 1)}
+    except Exception as e:
+        return {"ok": False, "error": f"{type(e).__name__}: {e}",
+                "results": [], "elapsed_s": round(_t.time() - started, 1)}
+    finally:
+        if browser is not None:
+            try: browser.close()
+            except Exception: pass
+
+
+def _run_tiktok_query(query: str, args, proxy_url) -> dict:
+    import time as _t
+    from .core import launch, new_page
+    started = _t.time()
+    browser = None
+    try:
+        engine_cls = _get_engine("tiktok_creative_center")
+        browser = launch(_ad_browser_cfg(proxy_url))
+        page = new_page(browser)
+        eng = engine_cls(page)
+        results = eng.search(query, limit=args.limit or 10,
+                             mode="top_ads", period=7,
+                             country_code=args.country or "US")
+        return {"ok": True,
+                "results": [r.__dict__ for r in (results or [])],
+                "elapsed_s": round(_t.time() - started, 1)}
+    except Exception as e:
+        return {"ok": False, "error": f"{type(e).__name__}: {e}",
+                "results": [], "elapsed_s": round(_t.time() - started, 1)}
+    finally:
+        if browser is not None:
+            try: browser.close()
+            except Exception: pass
+
+
+def _run_google_domain(domain: str, args, proxy_url) -> dict:
+    """Google ATC's domain mode is a much better match for app-store
+    workflows than search_advertisers — apps are tied to a website."""
+    import time as _t
+    started = _t.time()
+    try:
+        from .engines.google_ad_transparency import GoogleAdTransparencyEngine
+        if proxy_url:
+            eng = GoogleAdTransparencyEngine.raw(proxy_url=proxy_url, timeout=20)
+        else:
+            from .core import launch, new_page
+            browser = launch(_ad_browser_cfg(None))
+            page = new_page(browser)
+            eng = GoogleAdTransparencyEngine(page)
+        # Step 1: domain → advertiser_id
+        domain_results = eng.search(
+            domain, limit=1, mode="domain",
+            region=args.country if args.country and args.country != "US" else "anywhere",
+        )
+        if not domain_results:
+            return {"ok": True, "results": [],
+                    "elapsed_s": round(_t.time() - started, 1)}
+        adv_id = domain_results[0].__dict__.get("advertiser_id") or ""
+        if not adv_id.startswith("AR"):
+            return {"ok": True, "results": [r.__dict__ for r in domain_results],
+                    "elapsed_s": round(_t.time() - started, 1)}
+
+        # Step 2: advertiser_id → list of creatives
+        eng2 = (GoogleAdTransparencyEngine.raw(proxy_url=proxy_url, timeout=20)
+                if proxy_url else eng)
+        creatives = eng2.search(
+            adv_id, limit=args.limit or 10,
+            mode="advertiser_ads",
+            region=args.country if args.country and args.country != "US" else "anywhere",
+        )
+        return {"ok": True,
+                "results": [r.__dict__ for r in (creatives or [])],
+                "elapsed_s": round(_t.time() - started, 1)}
+    except Exception as e:
+        return {"ok": False, "error": f"{type(e).__name__}: {e}",
+                "results": [], "elapsed_s": round(_t.time() - started, 1)}
+
+
 def cmd_ads(args):
     """Cross-platform ad-creative search.
 
@@ -1506,6 +1797,33 @@ def main():
              "for the full key list.",
     )
 
+    # ads-by-app — App Store URL → competitor's ads across all platforms
+    abap = sub.add_parser(
+        "ads-by-app",
+        help="App Store URL → competitor's ads across Meta/IG/TikTok/Google",
+    )
+    abap.add_argument(
+        "app_url",
+        help="Apple App Store URL (https://apps.apple.com/.../id<NUM>), "
+             "Google Play URL (https://play.google.com/store/apps/details?id=<PKG>), "
+             "a bare numeric Apple track ID, or a Google Play package "
+             "name (com.foo.bar)",
+    )
+    abap.add_argument("--platform", "-p", default="all",
+                      help="Same as `ads`: comma-separated platforms or 'all'. "
+                           "Aliases: fb=meta, ig=instagram, tt=tiktok, g=google.")
+    abap.add_argument("--country", "-c", default="US",
+                      help="ISO-3166 alpha-2 (default US). Used as both Apple "
+                           "storefront country and ad-library country/region filter.")
+    abap.add_argument("--limit", "-n", type=int, default=10,
+                      help="Max results across all platforms (default: 10)")
+    abap.add_argument("--proxy", default=os.environ.get("FLUXISP_PROXY"),
+                      help="Proxy URL or 'env[:VAR]' or 'pool[:scheme]'. "
+                           "Defaults to $FLUXISP_PROXY.")
+    abap.add_argument("--filter", "-f", action="append", default=[],
+                      help="Same filter syntax as `ads --filter`. Repeat for AND.")
+    abap.add_argument("--json", action="store_true", help="Output as JSON")
+
     # ads-download — download every image / video URL from an ad-engine JSONL
     adp = sub.add_parser(
         "ads-download",
@@ -1698,6 +2016,8 @@ def main():
         cmd_list_engines(args)
     elif args.command == "ads":
         sys.exit(cmd_ads(args))
+    elif args.command == "ads-by-app":
+        sys.exit(cmd_ads_by_app(args))
     elif args.command == "ads-download":
         sys.exit(cmd_ads_download(args))
     elif args.command == "status":
