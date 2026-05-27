@@ -34,7 +34,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         build-essential gcc python3-dev \
     && rm -rf /var/lib/apt/lists/*
 
-COPY requirements.txt pyproject.toml README.md ./
+COPY requirements.txt pyproject.toml ./
 COPY agent_search ./agent_search
 
 # Pre-fetch wheels into /wheels so the runtime stage can install offline.
@@ -79,7 +79,7 @@ RUN pip install --no-index --find-links=/wheels agent-search \
 # Copy source so `python -m agent_search.serve` resolves the package
 # from /opt/AgentSearch (and venv-less invocation works).
 COPY agent_search ./agent_search
-COPY pyproject.toml requirements.txt README.md ./
+COPY pyproject.toml requirements.txt ./
 
 # Drop privileges.
 USER agentsearch
