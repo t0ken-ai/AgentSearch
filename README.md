@@ -178,8 +178,8 @@ Internet Archive · 1337x
 **🖼️ Images (4)**
 Unsplash · Pixabay · Pexels · Pinterest
 
-**📣 Ad Intelligence (4)** 🆕
-Meta Ad Library (FB/IG) · Google Ads Transparency · TikTok Creative Center · TikTok Ad Library
+**📣 Ad Intelligence (5) + App Store search** 🆕
+Meta Ad Library · Instagram Ad Library · Google Ads Transparency · TikTok Creative Center · TikTok Ad Library · Apple App Store · Google Play
 
 </td>
 </tr>
@@ -632,57 +632,166 @@ agentsearch proxies add http://user:pw@proxy.webshare.io:80 \
 </details>
 
 <details>
-<summary><b>📣 Ad Intelligence — research competitor creatives across Meta / Google / TikTok</b></summary>
+<summary><b>📣 Ad Intelligence — research competitor creatives across Meta / Instagram / Google / TikTok, plus App Store search & contact harvest</b></summary>
 
-The four ad-library engines turn AgentSearch into a self-hosted
-competitor of BigSpy / AdSpy / SocialPeta — same data, no $99/mo
-subscription, results in standard `SearchResult` JSON ready for an
-agent to consume.
+The five ad-library engines + App Store search turn AgentSearch into
+a self-hosted competitor of BigSpy / AdSpy / SocialPeta /
+data.ai — same data, no $99-499/mo subscription, results in standard
+JSON ready for an agent to consume.
+
+#### Single-engine ad search
 
 ```bash
-# 1. TikTok Creative Center — Top Ads by industry / region / time window
-agentsearch search "" --engine tt_ads --limit 10 --json
-# Filters: --period 7|30|180  --country_code US|GB|JP  --order_by ctr|like|cvr
-# Returns: ad_id, ctr, likes, industry_key, video_url (5 resolutions),
-#          cover_image_url, duration, brand_name
-
-# 2. Meta Ad Library — keyword / advertiser search across FB + IG
+# 1. Meta Ad Library — keyword / advertiser / page-URL search across FB + IG
 agentsearch search "shopify" --engine meta_ads --limit 20 --json
 # Returns per ad: ad_archive_id, page_name, days_running, image_urls[],
-#                 video_urls[], body_text, cta_text, link_url, country
-# Tip: Meta heavily rate-limits non-residential IPs — pair with --proxy:
-agentsearch search "shopify" --engine meta_ads --proxy pool:residential
+#                 video_urls[], body_text, cta_text, link_url,
+#                 collation_id, currency, reach, funding_entity,
+#                 disclaimer, page_like_count, age_gender_distribution,
+#                 region_distribution, ... (60+ fields)
 
-# 3. Google Ads Transparency — find advertisers + their ad libraries
-agentsearch search "nike" --engine g_ads --limit 10 --json
-# Returns advertiser_id, country, ad_count. Click into each URL or use:
-agentsearch search "AR01625195283841286145" --engine g_ads --limit 20 \
-  --mode advertiser_ads
+# 2. Instagram-only — same backend, locked to publisher_platforms=instagram
+agentsearch search "sephora" --engine ig_ads --limit 5 --json
 
-# 4. TikTok Ad Library — EU/UK only (DSA-mandated)
+# 3. TikTok Creative Center — 19 modes (Top Ads, Keyword Insights,
+#    Top Products, Trending Hashtags, Hashtag Analytics, Trending Songs,
+#    Song Analytics, Trending Creators, Trending Videos, …)
+agentsearch search "" --engine tt_ads --limit 10 --json
+# Filters: --period 7|30|180  --country_code US|GB|JP  --order_by ctr|like|cvr
+#          --industry <id>   --objective <id>   --keyword <kw>
+
+# 4. Google Ads Transparency — search/domain/advertiser_ads/creative_detail
+agentsearch search "nike.com" --engine g_ads --mode domain --json
+# → resolves to the advertiser_id directly, then list their ads:
+agentsearch search "AR01266454498310619137" --engine g_ads \
+    --mode advertiser_ads --region anywhere --limit 20
+
+# 5. TikTok Ad Library — EU/UK only (DSA-mandated)
 agentsearch search "burger king" --engine tiktok_ads --region GB --limit 10
-# Outside EU/UK → use tt_ads (Creative Center) instead.
-
-# 5. Cross-platform fan-out — `ads` bundle hits all three at once
-agentsearch ads "summer skincare" --limit 5
-# → meta_ad_library + google_ad_transparency + tiktok_creative_center
-#   in parallel, merged output.
-
-# 6. Save creative directly to disk (combine with --json + jq + curl)
-agentsearch search "" --engine tt_ads --limit 20 --json | \
-  jq -r '.[] | .video_url' | xargs -n1 -P4 curl -O
 ```
 
-**Why this works** — every platform now publishes a transparency portal
-(EU DSA + voluntary self-regulation). They expose creative + run dates
-publicly; what they hide is real spend / CTR / ROAS. The longest-running
-ads are the proven winners — **a creative running 60+ days is almost
-certainly profitable**, no spy tool can give you better signal.
+#### Cross-platform top-level commands
 
-> See `IMPROVEMENT_BACKLOG.md` (P1.5-K..N) for known caveats: Meta needs
-> residential proxy + sometimes rate-limits even those; TikTok Ad
-> Library is EU/UK only without `agentsearch login tiktok_business`
-> (planned); Google Ads Transparency `advertiser_ads` mode is best-effort.
+```bash
+# 6. `ads` — fan out across all four ad libraries with one query
+agentsearch ads "summer skincare" --limit 10
+#   meta + instagram + tiktok + google in parallel, merged + sorted by
+#   recency, normalized to a uniform AdRecord schema.
+
+# 6a. Filter on the fly — only keep video ads with high impression upper
+agentsearch ads "summer skincare" \
+    -f has_video=true \
+    -f min_impressions=10000 \
+    -f country=US \
+    -f last_seen_after=2026-04-01
+
+# 7. `ads-by-app` — App Store URL → competitor's ads on every platform
+agentsearch ads-by-app "https://apps.apple.com/us/app/instagram/id389801252" \
+    --platform all --precise --limit 20
+#   → resolves the app to a developer name + website domain
+#   → Google ATC: `mode=domain` (exact match)
+#   → Meta/IG:    `--precise` resolves dev name to canonical
+#                 Facebook page_id, then advertiser-mode query (no
+#                 keyword bleed-through)
+#   → TikTok CC:  Top Ads filtered by dev name
+
+# 8. `ads-batch` — weekly competitor sweep over a list of apps
+cat > competitors.txt <<EOF
+com.shopify.mobile
+https://apps.apple.com/us/app/instagram/id389801252
+com.spotify.music
+EOF
+
+agentsearch ads-batch competitors.txt -o ./weekly-sweep \
+    --platform all --precise --limit 20 \
+    --workers 4 --proxy-pool ./fluxisp-pool.txt
+#   → 4 apps in parallel through 4 distinct residential IPs (each line
+#     of fluxisp-pool.txt is a proxy URL; mismatched workers / pool
+#     sizes get a warning).
+#   → Output: ./weekly-sweep/<bundle_slug>.json per app + index.json
+#     with per-platform ad counts, app metadata, ratings, versions,
+#     last_updated dates.
+
+# 9. `ads-download` — pull every image / video URL from a JSON dump
+cat weekly-sweep/com_shopify_mobile.json | jq -c '.results[]' \
+    | agentsearch ads-download - -o ./swipe --max-per-record 1
+#   → highest-resolution video / image per ad, named
+#     {platform}_{ad_id}_{idx}_{kind}.{ext}, served through the same
+#     proxy that found them.
+```
+
+#### App Store keyword search & developer contact harvest
+
+```bash
+# 10. `app-search` — keyword search across Apple App Store + Google Play
+agentsearch app-search "shopify" --store all -n 6
+# →
+#   [apple ] Shopify: Sell online/in person   by Shopify Inc.   id=371294472
+#            web=http://www.shopify.com/mobile
+#   [google] Shopify: Sell online/in person   by Shopify        id=com.shopify.mobile
+#            web=http://www.shopify.com/mobile
+#            email=support@shopify.com
+#            privacy=http://www.shopify.com/legal/privacy
+
+# Each result carries 25 fields including support_email, privacy_url,
+# website, terms_url, version, last_updated, rating, rating_count,
+# size_bytes, supported_devices, languages, genres, screenshot_urls.
+
+# 10a. Only keep apps with public contact info (BD outreach / compliance)
+agentsearch app-search "fitness tracker" --store all -n 50 \
+    --with-contact --json > apps.json
+```
+
+#### End-to-end pipeline (keyword → competitors → ads → swipe files)
+
+```bash
+# Find every "fitness" app on both stores, then fan out to every ad
+# library, then pull all the creative bytes — one shell pipeline.
+
+agentsearch app-search "fitness" --store all -n 20 --json \
+    | jq -r '.results[].bundle_id' \
+    > /tmp/bundles.txt
+
+agentsearch ads-batch /tmp/bundles.txt -o ./fitness-intel \
+    --workers 4 --proxy-pool ./fluxisp-pool.txt --precise
+
+for f in fitness-intel/*.json; do
+  cat "$f" | jq -c '.results[]' \
+    | agentsearch ads-download - -o "./swipe/$(basename $f .json)" \
+        --max-per-record 1 --quiet
+done
+```
+
+#### What you can extract per ad
+
+| Field | Meta / Instagram | TikTok CC | Google ATC |
+|---|---|---|---|
+| `ad_id` / `creative_id` | ✅ | ✅ | ✅ |
+| `advertiser_name` / `page_name` | ✅ | ✅ | ✅ (via domain) |
+| `first_seen` / `last_seen` / `days_running` | ✅ (political/EU) | ⚠️ via period | ✅ |
+| `image_urls[]` / `video_urls[]` | ✅ (all carousel) | ✅ (5 resolutions) | ✅ (text/image/video) |
+| Performance (CTR / likes / CVR / 6-sec play rate) | ⚠️ political only | ✅ | ❌ |
+| Headline / description / destination URL | ✅ | ✅ | ✅ (text-ad protobuf decoded) |
+| Demographics + regions | ✅ political only | ❌ | ❌ |
+| Funding entity / disclaimer (political) | ✅ | ❌ | ❌ |
+
+> **Why this works** — every platform now publishes a transparency
+> portal (EU DSA + voluntary self-regulation). They expose creative +
+> run dates publicly; what they hide is real spend / CTR / ROAS. The
+> longest-running ads are the proven winners — **a creative running
+> 60+ days is almost certainly profitable**, no paid spy tool can
+> give you better signal.
+>
+> Some TikTok CC modes (`keyword_insights`, `creative_insights`,
+> `top_products`, `trending_*`, `hashtag_analytics`, `song_analytics`)
+> require a free `ads.tiktok.com` login — run `agentsearch login
+> tiktok_business` once and the cookies persist. The other 6 modes
+> (`top_ads`, `top_ads_spotlight`, `ad_*`) work without auth.
+>
+> Google ATC under residential proxies: when the cloakbrowser+stealth
+> path hits Google's bot challenge, the engine automatically falls
+> back to a raw HTTP transport (`GoogleAdTransparencyEngine.raw()`)
+> for full coverage.
 
 </details>
 

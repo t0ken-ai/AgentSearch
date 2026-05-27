@@ -168,8 +168,8 @@ Internet Archive · 1337x
 **🖼️ 图片 (4)**
 Unsplash · Pixabay · Pexels · Pinterest
 
-**📣 广告情报 (4)** 🆕
-Meta Ad Library (FB/IG) · Google Ads Transparency · TikTok Creative Center · TikTok Ad Library
+**📣 广告情报 (5) + 应用商店搜索** 🆕
+Meta Ad Library · Instagram Ad Library · Google Ads Transparency · TikTok Creative Center · TikTok Ad Library · Apple App Store · Google Play
 
 </td>
 </tr>
@@ -610,54 +610,164 @@ agentsearch proxies add http://user:pw@proxy.webshare.io:80 \
 </details>
 
 <details>
-<summary><b>📣 广告情报 — 在 Meta / Google / TikTok 上做竞品创意分析</b></summary>
+<summary><b>📣 广告情报 — Meta / Instagram / Google / TikTok 跨平台竞品创意分析,以及应用商店搜索 + 联系方式收集</b></summary>
 
-四个广告库 engine 把 AgentSearch 变成自托管的 BigSpy / 广大大 / SocialPeta —
-同样的数据，免费 / 自己抓 / 结果直接是标准 `SearchResult` JSON 给 agent 消费。
+五个广告库 engine + App Store 搜索把 AgentSearch 变成自托管的
+BigSpy / 广大大 / SocialPeta / data.ai —— 同样的数据,免 ¥99-499/月
+订阅,结果直接是标准 JSON 给 agent 消费。
+
+#### 单引擎广告搜索
 
 ```bash
-# 1. TikTok Creative Center — 按行业 / 地区 / 时间窗看 Top Ads
-agentsearch search "" --engine tt_ads --limit 10 --json
-# Filter: --period 7|30|180  --country_code US|CN|JP  --order_by ctr|like|cvr
-# 返回字段: ad_id, ctr, likes, industry_key, video_url（5 个码率），
-#           cover_image_url, duration, brand_name
-
-# 2. Meta Ad Library — FB + IG 关键词 / 广告主搜
+# 1. Meta Ad Library — FB + IG 关键词 / 广告主 / 主页 URL 搜索
 agentsearch search "shopify" --engine meta_ads --limit 20 --json
 # 每条返回: ad_archive_id, page_name, days_running, image_urls[],
-#            video_urls[], body_text, cta_text, link_url, country
-# 注意: Meta 对非住宅 IP 限流严重 — 配合 --proxy 用：
-agentsearch search "shopify" --engine meta_ads --proxy pool:residential
+#            video_urls[], body_text, cta_text, link_url,
+#            collation_id, currency, reach, funding_entity,
+#            disclaimer, page_like_count, age_gender_distribution,
+#            region_distribution, ... (60+ 字段)
 
-# 3. Google Ads Transparency — 找广告主 + 看他们的广告库
-agentsearch search "nike" --engine g_ads --limit 10 --json
-# 返回 advertiser_id, country, ad_count。点 URL 进去看，或：
-agentsearch search "AR01625195283841286145" --engine g_ads --limit 20 \
-  --mode advertiser_ads
+# 2. Instagram-only — 同一后端,锁 publisher_platforms=instagram
+agentsearch search "sephora" --engine ig_ads --limit 5 --json
 
-# 4. TikTok Ad Library — 仅 EU/UK（DSA 监管）
+# 3. TikTok Creative Center — 19 个 mode (Top Ads / Keyword Insights /
+#    Top Products / Trending Hashtags / Hashtag Analytics / Trending
+#    Songs / Song Analytics / Trending Creators / Trending Videos / ...)
+agentsearch search "" --engine tt_ads --limit 10 --json
+# Filter: --period 7|30|180  --country_code US|GB|JP  --order_by ctr|like|cvr
+#         --industry <id>   --objective <id>   --keyword <kw>
+
+# 4. Google Ads Transparency — search/domain/advertiser_ads/creative_detail
+agentsearch search "nike.com" --engine g_ads --mode domain --json
+# → 直接定位到 advertiser_id,然后列出广告:
+agentsearch search "AR01266454498310619137" --engine g_ads \
+    --mode advertiser_ads --region anywhere --limit 20
+
+# 5. TikTok Ad Library — 仅 EU/UK(DSA 监管)
 agentsearch search "burger king" --engine tiktok_ads --region GB --limit 10
-# EU/UK 之外用 tt_ads（Creative Center）。
-
-# 5. 跨平台并行 — `ads` bundle 一次打三个
-agentsearch ads "summer skincare" --limit 5
-# → meta_ad_library + google_ad_transparency + tiktok_creative_center
-#   并行扇出，结果合并。
-
-# 6. 把素材直接下到本地（管道用法）
-agentsearch search "" --engine tt_ads --limit 20 --json | \
-  jq -r '.[] | .video_url' | xargs -n1 -P4 curl -O
 ```
 
-**为什么这能跑通** — 每个平台现在都建了 transparency 入口（EU DSA + 自我合规），
-公开了创意 + 投放时间。**他们不公开的是真实消耗 / CTR / ROAS**，所以广大大、
-BigSpy 卖的"消耗排行"全是估算（impressions × 行业 CPM）。一个广告挂超过
-**60 天的几乎一定盈利** —— 这是唯一真实可见的 performance signal，比任何
-spy tool 的估算都准。
+#### 跨平台顶层命令
 
-> 详见 `IMPROVEMENT_BACKLOG.md`（P1.5-K..N）的已知限制：Meta 需要住宅代理
-> 且偶尔仍被限；TikTok Ad Library 在 `agentsearch login tiktok_business`
-> （计划中）之前仅限 EU/UK；Google ATC 的 `advertiser_ads` 模式是 best-effort。
+```bash
+# 6. `ads` — 一个 query 打四个广告库
+agentsearch ads "summer skincare" --limit 10
+#   meta + instagram + tiktok + google 并行,合并按时间排序,
+#   归一化成统一的 AdRecord 字段。
+
+# 6a. 边查边过滤 — 只要视频广告 + impression 上限
+agentsearch ads "summer skincare" \
+    -f has_video=true \
+    -f min_impressions=10000 \
+    -f country=US \
+    -f last_seen_after=2026-04-01
+
+# 7. `ads-by-app` — App Store URL → 该 app 在每个平台投的广告
+agentsearch ads-by-app "https://apps.apple.com/us/app/instagram/id389801252" \
+    --platform all --precise --limit 20
+#   → 解析 app 拿到 developer name + 官网域名
+#   → Google ATC: `mode=domain` (域名精确匹配)
+#   → Meta/IG:    `--precise` 把 dev name 解析到 Facebook canonical
+#                 page_id,然后 advertiser-mode 查询(0 关键词噪音)
+#   → TikTok CC:  Top Ads 按 dev name 过滤
+
+# 8. `ads-batch` — 周度竞品 sweep,批量跑一组 app
+cat > competitors.txt <<EOF
+com.shopify.mobile
+https://apps.apple.com/us/app/instagram/id389801252
+com.spotify.music
+EOF
+
+agentsearch ads-batch competitors.txt -o ./weekly-sweep \
+    --platform all --precise --limit 20 \
+    --workers 4 --proxy-pool ./fluxisp-pool.txt
+#   → 4 个 app 通过 4 个不同住宅 IP 真并发(fluxisp-pool.txt 一行一个
+#     代理 URL;workers/pool 不匹配会有警告)
+#   → 输出: ./weekly-sweep/<bundle_slug>.json 每个 app 一份
+#     + index.json 总览(per-platform 广告数、app 元数据、评分、
+#     版本、上次更新日期)
+
+# 9. `ads-download` — 把 JSON 中的所有图片/视频 URL 拉到本地
+cat weekly-sweep/com_shopify_mobile.json | jq -c '.results[]' \
+    | agentsearch ads-download - -o ./swipe --max-per-record 1
+#   → 每个广告挑最高分辨率视频/图,按
+#     {platform}_{ad_id}_{idx}_{kind}.{ext} 命名,
+#     走相同代理出口
+```
+
+#### 应用商店关键词搜索 + 开发者联系方式收集
+
+```bash
+# 10. `app-search` — 跨 Apple App Store / Google Play 关键词搜索
+agentsearch app-search "shopify" --store all -n 6
+# →
+#   [apple ] Shopify: Sell online/in person   by Shopify Inc.   id=371294472
+#            web=http://www.shopify.com/mobile
+#   [google] Shopify: Sell online/in person   by Shopify        id=com.shopify.mobile
+#            web=http://www.shopify.com/mobile
+#            email=support@shopify.com
+#            privacy=http://www.shopify.com/legal/privacy
+
+# 每个结果含 25 个字段:support_email、privacy_url、website、
+# terms_url、version、last_updated、rating、rating_count、
+# size_bytes、supported_devices、languages、genres、
+# screenshot_urls 等。
+
+# 10a. 只要有 contact 信息的 app(BD 拓客 / 合规审计)
+agentsearch app-search "fitness tracker" --store all -n 50 \
+    --with-contact --json > apps.json
+```
+
+#### 端到端 pipeline(关键词 → 找竞品 → 抓广告 → 下素材)
+
+```bash
+# 一条 shell pipeline:跨两商店搜 "fitness" → 扇出 4 个广告库 →
+# 把所有创意字节拉本地。
+
+agentsearch app-search "fitness" --store all -n 20 --json \
+    | jq -r '.results[].bundle_id' \
+    > /tmp/bundles.txt
+
+agentsearch ads-batch /tmp/bundles.txt -o ./fitness-intel \
+    --workers 4 --proxy-pool ./fluxisp-pool.txt --precise
+
+for f in fitness-intel/*.json; do
+  cat "$f" | jq -c '.results[]' \
+    | agentsearch ads-download - -o "./swipe/$(basename $f .json)" \
+        --max-per-record 1 --quiet
+done
+```
+
+#### 每条广告能拿到什么
+
+| 字段 | Meta / Instagram | TikTok CC | Google ATC |
+|---|---|---|---|
+| `ad_id` / `creative_id` | ✅ | ✅ | ✅ |
+| `advertiser_name` / `page_name` | ✅ | ✅ | ✅ (via domain) |
+| `first_seen` / `last_seen` / `days_running` | ✅ (政治/EU) | ⚠️ via period | ✅ |
+| `image_urls[]` / `video_urls[]` | ✅ (含轮播) | ✅ (5 种码率) | ✅ (text/image/video) |
+| 性能(CTR / likes / CVR / 6 秒完播率) | ⚠️ 政治才有 | ✅ | ❌ |
+| Headline / description / 落地 URL | ✅ | ✅ | ✅ (text-ad protobuf 解码) |
+| 人群分布 + 地域分布 | ✅ 仅政治 | ❌ | ❌ |
+| 资助方 / 免责声明(政治) | ✅ | ❌ | ❌ |
+
+> **为什么这能跑通** —— 每个平台现在都建了 transparency 入口
+> (EU DSA + 自我合规),公开了创意 + 投放时间。**他们不公开的是
+> 真实消耗 / CTR / ROAS**,所以广大大、BigSpy 卖的"消耗排行"全是
+> 估算(impressions × 行业 CPM)。一个广告挂超过 **60 天的几乎一定
+> 盈利** —— 这是唯一真实可见的 performance signal,比任何 spy
+> tool 的估算都准。
+>
+> 部分 TikTok CC mode (`keyword_insights` / `creative_insights` /
+> `top_products` / `trending_*` / `hashtag_analytics` /
+> `song_analytics`) 需要 `ads.tiktok.com` 免费登录 — 跑一次
+> `agentsearch login tiktok_business` 后 cookies 持久化即可。
+> 另外 6 个 mode (`top_ads` / `top_ads_spotlight` / `ad_*`)
+> 无需登录。
+>
+> Google ATC 在住宅代理下:cloakbrowser+stealth 路径如果撞上
+> Google 的 bot 挑战,引擎会自动 fallback 到 raw HTTP transport
+> (`GoogleAdTransparencyEngine.raw()`)保证全覆盖。
 
 </details>
 
