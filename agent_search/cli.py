@@ -515,8 +515,23 @@ def cmd_ads_batch(args):
     Designed for "weekly competitor sweep" workflows: drop a list of
     competitor apps in a file, run the batch, get a folder full of
     structured reports you can diff over time.
+
+    Concurrency:
+
+      * ``--workers 1`` (default) — apps run sequentially. Each app
+        already fans out across ad libraries internally, so this is
+        the safest default through a single proxy egress.
+      * ``--workers N`` (N > 1) — N apps run in parallel. *Strongly*
+        recommended to pair with ``--proxy-pool`` so each worker
+        egresses through a distinct IP; sharing one residential IP
+        across N concurrent CloakBrowsers contends and causes
+        intermittent 0-result responses from Meta in particular.
+      * ``--proxy-pool path/to/proxies.txt`` — one proxy URL per
+        line. Workers pick proxies round-robin. Falls back to
+        ``--proxy`` for any worker without a slot.
     """
     import json
+    import threading
     import time as _t
     from .engines._app_store import lookup_app
     from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -540,72 +555,114 @@ def cmd_ads_batch(args):
 
     out_dir = os.path.abspath(args.output)
     os.makedirs(out_dir, exist_ok=True)
-    print(f"==> {len(urls)} apps → {out_dir}", file=sys.stderr)
-    print(f"    platforms={args.platform}  precise={args.precise}  "
-          f"strict={'no' if args.no_strict else 'yes'}",
-          file=sys.stderr)
 
-    # Build a fake args namespace per-app, reusing the cmd_ads_by_app
-    # helper functions (which expect args.platform / args.country / ...
-    # / args.filter / args.proxy / args.no_strict / args.precise / etc.).
-    proxy_url = _resolve_proxy_url(args.proxy) if args.proxy else None
-    proxies = ({"https": proxy_url, "http": proxy_url}) if proxy_url else None
+    # Build proxy pool — explicit pool file > --proxy > $FLUXISP_PROXY.
+    proxy_pool_urls: list[Optional[str]] = []
+    if args.proxy_pool:
+        try:
+            with open(args.proxy_pool, "r", encoding="utf-8") as f:
+                for line in f:
+                    line = line.strip()
+                    if line and not line.startswith("#"):
+                        proxy_pool_urls.append(line)
+        except FileNotFoundError:
+            print(f"error: --proxy-pool file not found: {args.proxy_pool}",
+                  file=sys.stderr)
+            return 1
+        if not proxy_pool_urls:
+            print(f"error: --proxy-pool file empty: {args.proxy_pool}",
+                  file=sys.stderr)
+            return 1
+    base_proxy = _resolve_proxy_url(args.proxy) if args.proxy else None
+    if not proxy_pool_urls and base_proxy:
+        proxy_pool_urls = [base_proxy]
 
-    # Run apps sequentially — they each fan out internally, and running
-    # multiple browser fan-outs in parallel through one residential
-    # proxy egress contends badly. Use --workers >1 only when you have
-    # a beefy local + multiple proxy pools.
+    # Round-robin proxy assigner — thread-safe.
+    rr_lock = threading.Lock()
+    rr_idx = [0]
+    def _next_proxy() -> Optional[str]:
+        if not proxy_pool_urls:
+            return None
+        with rr_lock:
+            p = proxy_pool_urls[rr_idx[0] % len(proxy_pool_urls)]
+            rr_idx[0] += 1
+        return p
+
+    workers = max(1, int(args.workers or 1))
+    if workers > 1 and len(proxy_pool_urls) <= 1:
+        print(
+            f"WARNING: --workers={workers} with only "
+            f"{len(proxy_pool_urls)} proxy in the pool; multiple "
+            f"concurrent CloakBrowsers will share one IP and likely "
+            f"hit rate-limiting. Strongly recommend --proxy-pool with "
+            f">= {workers} entries.",
+            file=sys.stderr,
+        )
+
+    print(
+        f"==> {len(urls)} apps → {out_dir}\n"
+        f"    platforms={args.platform}  precise={args.precise}  "
+        f"strict={'no' if args.no_strict else 'yes'}\n"
+        f"    workers={workers}  proxy_pool_size={len(proxy_pool_urls)}",
+        file=sys.stderr,
+    )
+
     started = _t.time()
-    summaries = []
-    for i, url in enumerate(urls, 1):
-        app_started = _t.time()
-        print(f"\n[{i}/{len(urls)}] {url}", file=sys.stderr)
+    progress_lock = threading.Lock()
+    progress = [0]   # mutable counter
 
-        # Resolve metadata first so the summary always has a slug,
-        # even when the fan-out fails.
-        meta = lookup_app(url, proxies=proxies,
+    def _process_one(url: str) -> dict:
+        proxy_for_this = _next_proxy()
+        proxies_for_lookup = (
+            {"https": proxy_for_this, "http": proxy_for_this}
+            if proxy_for_this else None
+        )
+        app_started = _t.time()
+
+        meta = lookup_app(url, proxies=proxies_for_lookup,
                           country=(args.country or "us").lower())
         if not meta:
-            print(f"  ✗ could not resolve, skipping", file=sys.stderr)
-            summaries.append({"input": url, "error": "lookup_failed"})
-            continue
+            with progress_lock:
+                progress[0] += 1
+                idx = progress[0]
+            print(f"[{idx}/{len(urls)}] ✗ {url}: lookup_failed",
+                  file=sys.stderr)
+            return {"input": url, "error": "lookup_failed"}
 
         slug = (
             meta.bundle_id.replace(".", "_")
             or f"{meta.store}_{meta.app_id}"
         )
 
-        # Run ads-by-app in-process by calling the same plumbing we
-        # already wrote. We do it through a shim: build a per-app
-        # args namespace.
+        # Build per-app args namespace; override --proxy with the
+        # round-robin pick so each worker gets its own egress.
         from types import SimpleNamespace
         sub_args = SimpleNamespace(
             app_url=url, platform=args.platform, country=args.country,
-            limit=args.limit, proxy=args.proxy, filter=list(args.filter or []),
+            limit=args.limit, proxy=proxy_for_this,
+            filter=list(args.filter or []),
             no_strict=args.no_strict, precise=args.precise,
-            json=True,
+            json=False,
+            _preresolved_meta=meta,   # skip the duplicate lookup
+            _return_dict=True,        # avoid global-stdout race in threads
         )
-        # cmd_ads_by_app prints to stdout in JSON mode — capture that
-        # via redirect, parse, and re-emit to file.
-        import io
-        buf = io.StringIO()
-        old_stdout = sys.stdout
-        rc = 1
         try:
-            sys.stdout = buf
-            rc = cmd_ads_by_app(sub_args)
-        finally:
-            sys.stdout = old_stdout
-
-        try:
-            payload = json.loads(buf.getvalue())
+            payload = cmd_ads_by_app(sub_args)
         except Exception as e:
-            print(f"  ✗ JSON parse error from cmd_ads_by_app: {e}",
+            with progress_lock:
+                progress[0] += 1
+                idx = progress[0]
+            print(f"[{idx}/{len(urls)}] ✗ {url}: {type(e).__name__}: {e}",
                   file=sys.stderr)
-            summaries.append({
-                "input": url, "slug": slug, "error": "parse_failed",
-            })
-            continue
+            return {"input": url, "slug": slug,
+                    "error": f"{type(e).__name__}: {e}"}
+        if not isinstance(payload, dict):
+            with progress_lock:
+                progress[0] += 1
+                idx = progress[0]
+            print(f"[{idx}/{len(urls)}] ✗ {url}: bad return type {type(payload)}",
+                  file=sys.stderr)
+            return {"input": url, "slug": slug, "error": "bad_return"}
 
         out_path = os.path.join(out_dir, f"{slug}.json")
         with open(out_path, "w", encoding="utf-8") as f:
@@ -616,12 +673,18 @@ def cmd_ads_batch(args):
             for lbl, stats in (payload.get("by_platform") or {}).items()
         }
         elapsed = _t.time() - app_started
+
+        with progress_lock:
+            progress[0] += 1
+            idx = progress[0]
+        proxy_short = proxy_for_this.split("@")[-1] if proxy_for_this else "direct"
         print(
-            f"  ✓ {meta.title} → {payload.get('count', 0)} ads  "
-            f"({per_platform})  [{elapsed:.0f}s] → {out_path}",
+            f"[{idx}/{len(urls)}] ✓ {meta.title}: {payload.get('count', 0)} ads "
+            f"({per_platform}) [{elapsed:.0f}s, via {proxy_short}]",
             file=sys.stderr,
         )
-        summaries.append({
+
+        return {
             "input": url, "slug": slug,
             "title": meta.title, "developer": meta.developer_name,
             "domain": meta.domain, "store": meta.store,
@@ -632,7 +695,24 @@ def cmd_ads_batch(args):
             "by_platform": per_platform,
             "json_file": f"{slug}.json",
             "elapsed_s": round(elapsed, 1),
-        })
+        }
+
+    # Run dispatch
+    summaries: list[dict] = []
+    if workers <= 1:
+        for url in urls:
+            summaries.append(_process_one(url))
+    else:
+        with ThreadPoolExecutor(max_workers=workers) as ex:
+            futures = {ex.submit(_process_one, url): url for url in urls}
+            for fut in as_completed(futures):
+                try:
+                    summaries.append(fut.result())
+                except Exception as e:
+                    summaries.append({
+                        "input": futures[fut],
+                        "error": f"{type(e).__name__}: {e}",
+                    })
 
     # Index
     index_path = os.path.join(out_dir, "index.json")
@@ -643,6 +723,8 @@ def cmd_ads_batch(args):
         "country": args.country,
         "precise": args.precise,
         "strict": not args.no_strict,
+        "workers": workers,
+        "proxy_pool_size": len(proxy_pool_urls),
         "total_apps": len(urls),
         "successful": sum(1 for s in summaries if "error" not in s),
         "elapsed_s": round(total_elapsed, 1),
@@ -653,7 +735,9 @@ def cmd_ads_batch(args):
 
     print(file=sys.stderr)
     print(f"==> done: {index['successful']}/{len(urls)} apps in "
-          f"{total_elapsed:.0f}s", file=sys.stderr)
+          f"{total_elapsed:.0f}s "
+          f"(workers={workers} proxy_pool={len(proxy_pool_urls)})",
+          file=sys.stderr)
     print(f"    summary: {index_path}", file=sys.stderr)
     return 0 if index["successful"] > 0 else 1
 
@@ -680,14 +764,20 @@ def cmd_ads_by_app(args):
 
     proxy_url = _resolve_proxy_url(args.proxy) if args.proxy else None
 
-    # 1. Look up app metadata
-    print(f"==> Looking up app: {args.app_url}", file=sys.stderr)
-    proxies = {"https": proxy_url, "http": proxy_url} if proxy_url else None
-    meta = lookup_app(
-        args.app_url,
-        proxies=proxies,
-        country=(args.country or "us").lower(),
-    )
+    # 1. Look up app metadata. Batch-mode callers can pre-resolve and
+    # pass the AppMetadata via a private kwarg to skip the duplicate
+    # network call (which doubles contention under multi-worker fan-out).
+    pre = getattr(args, "_preresolved_meta", None)
+    if pre is not None:
+        meta = pre
+    else:
+        print(f"==> Looking up app: {args.app_url}", file=sys.stderr)
+        proxies = {"https": proxy_url, "http": proxy_url} if proxy_url else None
+        meta = lookup_app(
+            args.app_url,
+            proxies=proxies,
+            country=(args.country or "us").lower(),
+        )
     if not meta:
         print(
             f"error: could not resolve {args.app_url!r}. "
@@ -914,29 +1004,35 @@ def cmd_ads_by_app(args):
         flat = flat[:args.limit]
 
     # 5. Output
+    payload = {
+        "app": meta.to_dict(),
+        "platforms": list(results_by_platform.keys()),
+        "by_platform": {
+            lbl: {
+                "ok": p_data.get("ok", True),
+                "error": p_data.get("error"),
+                "count": len(p_data.get("results") or []),
+                "elapsed_s": p_data.get("elapsed_s"),
+            }
+            for lbl, p_data in results_by_platform.items()
+        },
+        "count": len(flat),
+        "results": flat,
+    }
+    # Batch-mode caller can ask for the dict directly to avoid the
+    # global-stdout race that shows up when running this in threads.
+    if getattr(args, "_return_dict", False):
+        return payload
+
     if args.json:
-        print(json.dumps({
-            "app": meta.to_dict(),
-            "platforms": list(results_by_platform.keys()),
-            "by_platform": {
-                lbl: {
-                    "ok": payload.get("ok", True),
-                    "error": payload.get("error"),
-                    "count": len(payload.get("results") or []),
-                    "elapsed_s": payload.get("elapsed_s"),
-                }
-                for lbl, payload in results_by_platform.items()
-            },
-            "count": len(flat),
-            "results": flat,
-        }, indent=2, ensure_ascii=False))
+        print(json.dumps(payload, indent=2, ensure_ascii=False))
     else:
         print(file=sys.stderr)
-        for lbl, payload in results_by_platform.items():
-            status = "OK" if payload.get("ok", True) else "FAIL"
-            n = len(payload.get("results") or [])
-            elap = payload.get("elapsed_s") or 0
-            err = payload.get("error", "")
+        for lbl, p_data in results_by_platform.items():
+            status = "OK" if p_data.get("ok", True) else "FAIL"
+            n = len(p_data.get("results") or [])
+            elap = p_data.get("elapsed_s") or 0
+            err = p_data.get("error", "")
             line = f"  [{lbl:>9}] {status:4}  {n:3} results  {elap:5.1f}s"
             if err:
                 line += f"  err={err[:80]}"
@@ -952,7 +1048,7 @@ def cmd_ads_by_app(args):
                 f"{d.get('last_seen_iso') or '':<10}  "
                 f"{preview}"
             )
-    return 0 if any(p.get("ok", True) for p in results_by_platform.values()) else 1
+    return 0 if any(p_data.get("ok", True) for p_data in results_by_platform.values()) else 1
 
 
 def _run_meta_like_query(engine_name: str, query: str, args, proxy_url) -> dict:
@@ -2145,6 +2241,17 @@ def main():
                      help="Max ads per app (default: 20)")
     abp.add_argument("--proxy", default=os.environ.get("FLUXISP_PROXY"),
                      help="Proxy URL or 'env[:VAR]' or 'pool[:scheme]'")
+    abp.add_argument("--proxy-pool",
+                     help="Path to a text file with one proxy URL per "
+                          "line. Workers pick from it round-robin. Use "
+                          "with --workers >1 to avoid single-IP "
+                          "contention; sample line: "
+                          "http://user:pass@host:port. Lines starting "
+                          "with # are comments.")
+    abp.add_argument("--workers", type=int, default=1,
+                     help="Apps to process in parallel (default: 1). "
+                          "Strongly pair with --proxy-pool of equal or "
+                          "greater size to avoid IP contention.")
     abp.add_argument("--filter", "-f", action="append", default=[],
                      help="Same filter syntax as `ads --filter`")
     abp.add_argument("--no-strict", action="store_true",
