@@ -267,6 +267,26 @@ def list_modes() -> list[str]:
     return sorted(_MODES.keys())
 
 
+# Modes that require an authenticated TikTok-for-Business session
+# (sessionid_ads cookie). Without login the upstream returns no data
+# even though the page navigation succeeds. Verified empirically on
+# 2026-05-27 + matches lofe-w/tiktok-creative-center-scraper-public's
+# documented behaviour.
+_AUTH_REQUIRED_MODES = frozenset({
+    "keyword_insights", "keyword_videos", "keyword_examples",
+    "keyword_related", "creative_insights", "top_products",
+    "trending_hashtags", "hashtag_analytics",
+    "trending_songs", "trending_songs_breakout", "song_analytics",
+    "trending_creators", "trending_videos",
+})
+
+# Modes that work without authentication (verified empirically).
+_PUBLIC_MODES = frozenset({
+    "top_ads", "top_ads_spotlight", "ad_analytics", "ad_keyframe",
+    "ad_percentile", "ad_recommend",
+})
+
+
 # ---------------------------------------------------------------------------
 # Engine
 # ---------------------------------------------------------------------------
@@ -451,9 +471,18 @@ class TikTokCreativeCenterEngine(BaseEngine):
                 pass
 
         if captured["body"] is None:
-            self.last_status["error"] = captured.get("err") or "no response captured"
-            log.warning("[ttcc/%s] no API response captured (%s)",
-                        m, self.last_status["error"])
+            err = captured.get("err") or "no response captured"
+            if m in _AUTH_REQUIRED_MODES:
+                err += (
+                    f" — mode={m!r} requires an authenticated "
+                    f"TikTok-for-Business session. Log in once at "
+                    f"https://ads.tiktok.com via a persistent profile "
+                    f"(BrowserConfig(user_data_dir=...)) so sessionid_ads "
+                    f"is set. Public modes that work without login: "
+                    f"{sorted(_PUBLIC_MODES)}"
+                )
+            self.last_status["error"] = err
+            log.warning("[ttcc/%s] %s", m, err)
             return []
 
         api_code = captured["body"].get("code")

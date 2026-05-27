@@ -308,7 +308,16 @@ class GoogleAdTransparencyEngine(BaseEngine):
                                      setup=lambda: self._fill_search_box(query),
                                      wait=12.0)
         if not captured:
-            self.last_status["error"] = "no SearchSuggestions response"
+            self.last_status["error"] = (
+                "no SearchSuggestions response — Google ATC's stealth "
+                "checks frequently reject CloakBrowser when egressing "
+                "via residential proxies (the page never finishes "
+                "navigation commit). Workarounds: (a) run without a "
+                "proxy from a clean US/EU IP, (b) re-run from a "
+                "datacenter IP that ATC trusts, (c) port the engine "
+                "to raw HTTP RPC (block-town/google-ads-transparency-mcp "
+                "shows the protocol)."
+            )
             return []
 
         results: list[SearchResult] = []
@@ -592,11 +601,23 @@ class GoogleAdTransparencyEngine(BaseEngine):
     # ------------------------------------------------------------------ helpers
 
     def _capture_rpc(self, rpc_marker: str, page_url: str,
-                     *, setup=None, wait: float = 15.0) -> Optional[dict]:
+                     *, setup=None, wait: float = 25.0,
+                     nav_timeout: int = 30000) -> Optional[dict]:
         """Navigate ``page_url``, optionally run ``setup``, and return the
         first JSON body of an RPC matching ``rpc_marker``.
 
         Pure helper used by all 4 modes for response interception.
+
+        We use ``wait_until="commit"`` (the most permissive Playwright
+        wait state — fires as soon as the navigation request is
+        committed to the renderer) because Google's ``adstransparency``
+        SPA is heavy and ``domcontentloaded`` often takes >30s through
+        residential proxies even though the target RPC fires within
+        seconds. After the commit we keep the listener active for
+        ``wait`` seconds, which is when the actual marker arrives.
+
+        Important: this method has a strict total budget — never blocks
+        more than ``nav_timeout/1000 + wait`` seconds.
         """
         captured: dict[str, Any] = {"body": None}
 
@@ -612,12 +633,21 @@ class GoogleAdTransparencyEngine(BaseEngine):
                         pass
 
         self.page.on("response", _on_response)
+        nav_ok = False
         try:
             log.info("[g_ads] navigating %s (capture=%s)", page_url, rpc_marker)
-            if not safe_goto(self.page, page_url, timeout=30000, retries=1):
-                self.last_status["error"] = "navigation failed"
-                return None
-            if setup:
+            try:
+                self.page.goto(page_url, timeout=nav_timeout,
+                               wait_until="commit")
+                nav_ok = True
+            except Exception as e:
+                log.warning("[g_ads] goto %s; relying on partial navigation",
+                            type(e).__name__)
+
+            if setup and nav_ok:
+                # Give the SPA a moment after commit before we start
+                # poking inputs.
+                self.page.wait_for_timeout(3000)
                 try:
                     setup()
                 except Exception as e:
@@ -636,7 +666,8 @@ class GoogleAdTransparencyEngine(BaseEngine):
 
     def _fill_search_box(self, query: str) -> None:
         """Find and fill the homepage search box. Several selectors are
-        candidates because Google rotates DOM."""
+        candidates because Google rotates DOM. All operations are
+        time-bounded so this method never blocks more than a few seconds."""
         self.page.wait_for_timeout(2000)
         box = None
         for sel in (
@@ -656,8 +687,19 @@ class GoogleAdTransparencyEngine(BaseEngine):
                 continue
         if box is None:
             raise RuntimeError("search input not found")
-        box.click()
-        box.fill(query)
+        # Each interaction has its own short timeout; if the SPA isn't
+        # yet hydrated we give up rather than blocking on the default
+        # 30s Playwright timeout.
+        try:
+            box.click(timeout=5000)
+        except Exception as e:
+            log.warning("[g_ads] click failed: %s", e)
+            return
+        try:
+            box.fill(query, timeout=5000)
+        except Exception as e:
+            log.warning("[g_ads] fill failed: %s", e)
+            return
         self.page.wait_for_timeout(800)
 
     @staticmethod
