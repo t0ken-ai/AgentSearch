@@ -623,6 +623,21 @@ def cmd_ads(args):
             except Exception as e:
                 logging.warning("[ads] normalize %s record failed: %s", lbl, e)
 
+    # Apply post-collection filters (--filter key=val).
+    if args.filter:
+        try:
+            preds = _parse_ad_filters(args.filter)
+        except ValueError as e:
+            print(f"error: {e}", file=sys.stderr)
+            return 2
+        before = len(flat)
+        flat = [d for d in flat if all(p(d) for p in preds)]
+        print(
+            f"  --filter applied: {before} → {len(flat)} records "
+            f"({len(args.filter)} predicate{'s' if len(args.filter) != 1 else ''})",
+            file=sys.stderr,
+        )
+
     # Sort by last_seen_iso desc, then days_running desc — recent +
     # long-running ads bubble up first, which tends to be what an
     # ad-creative researcher wants.
@@ -820,6 +835,151 @@ def _run_google(args, proxy_url) -> dict:
         if browser is not None:
             try: browser.close()
             except Exception: pass
+
+
+def _parse_ad_filters(specs: list[str]):
+    """Compile a list of ``key=val`` filter specs into AdRecord predicates.
+
+    Supported keys (operate on the flattened :class:`AdRecord` dict):
+
+      Numeric ranges:
+        * ``min_impressions`` / ``max_impressions`` (vs ``impressions_lower``
+          and ``impressions_upper`` respectively, conservative — pass when
+          unknown)
+        * ``min_spend`` / ``max_spend``
+        * ``min_days_running`` / ``max_days_running``
+        * ``min_score`` / ``max_score`` (engagement signal: CTR % or
+          equivalent depending on engine)
+
+      Bool flags:
+        * ``is_active=true|false``
+        * ``has_video=true|false``  (any media_url ends in mp4/webm/etc.)
+        * ``has_image=true|false``  (any media_url ends in jpg/png/etc.)
+        * ``has_landing=true|false`` (landing_url non-empty)
+
+      Date strings (YYYY-MM-DD, vs first/last_seen_iso):
+        * ``last_seen_after`` / ``last_seen_before``
+        * ``first_seen_after`` / ``first_seen_before``
+
+      Match:
+        * ``country=US`` (case-insensitive equality)
+        * ``platform=meta|instagram|tiktok_cc|tiktok_lib|google_atc``
+        * ``advertiser_contains=Nike`` (case-insensitive substring on
+          ``advertiser_name``)
+
+    Multiple ``--filter`` flags AND together. Returns a list of
+    callables ``(record_dict) → bool``.
+
+    Raises ``ValueError`` on unknown keys / malformed specs so the
+    caller can surface a clear error to the user.
+    """
+    image_exts = (".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp")
+    video_exts = (".mp4", ".webm", ".mov", ".m4v", ".mkv", ".avi")
+
+    def _has_kind(d, exts):
+        for u in d.get("media_urls") or []:
+            if isinstance(u, str) and any(e in u.lower() for e in exts):
+                return True
+        return False
+
+    def _to_bool(s):
+        if isinstance(s, bool):
+            return s
+        return s.strip().lower() in ("1", "true", "yes", "y", "on")
+
+    preds = []
+    for spec in specs:
+        if "=" not in spec:
+            raise ValueError(
+                f"--filter expects key=val, got {spec!r}. "
+                f"Example: --filter has_video=true --filter min_impressions=10000"
+            )
+        key, val = spec.split("=", 1)
+        key = key.strip().lower()
+        val = val.strip()
+
+        # Numeric ranges (impressions / spend use the upper/lower bounds).
+        if key == "min_impressions":
+            n = int(val)
+            preds.append(lambda d, n=n: (
+                d.get("impressions_upper") is None
+                or d["impressions_upper"] >= n
+            ))
+        elif key == "max_impressions":
+            n = int(val)
+            preds.append(lambda d, n=n: (
+                d.get("impressions_lower") is None
+                or d["impressions_lower"] <= n
+            ))
+        elif key == "min_spend":
+            n = int(val)
+            preds.append(lambda d, n=n: (
+                d.get("spend_upper") is None or d["spend_upper"] >= n
+            ))
+        elif key == "max_spend":
+            n = int(val)
+            preds.append(lambda d, n=n: (
+                d.get("spend_lower") is None or d["spend_lower"] <= n
+            ))
+        elif key == "min_days_running":
+            n = int(val)
+            preds.append(lambda d, n=n: (d.get("days_running") or 0) >= n)
+        elif key == "max_days_running":
+            n = int(val)
+            preds.append(lambda d, n=n: (d.get("days_running") or 0) <= n)
+        elif key == "min_score":
+            n = float(val)
+            preds.append(lambda d, n=n: (
+                d.get("score") is None or d["score"] >= n
+            ))
+        elif key == "max_score":
+            n = float(val)
+            preds.append(lambda d, n=n: (
+                d.get("score") is None or d["score"] <= n
+            ))
+        # Bool flags
+        elif key == "is_active":
+            b = _to_bool(val)
+            preds.append(lambda d, b=b: d.get("is_active") is b)
+        elif key == "has_video":
+            b = _to_bool(val)
+            preds.append(lambda d, b=b: _has_kind(d, video_exts) is b)
+        elif key == "has_image":
+            b = _to_bool(val)
+            preds.append(lambda d, b=b: _has_kind(d, image_exts) is b)
+        elif key == "has_landing":
+            b = _to_bool(val)
+            preds.append(lambda d, b=b: bool(d.get("landing_url")) is b)
+        # Dates (string ≤/≥ comparison works on YYYY-MM-DD)
+        elif key == "last_seen_after":
+            preds.append(lambda d, v=val: (d.get("last_seen_iso") or "") >= v)
+        elif key == "last_seen_before":
+            preds.append(lambda d, v=val: (d.get("last_seen_iso") or "9999-12-31") <= v)
+        elif key == "first_seen_after":
+            preds.append(lambda d, v=val: (d.get("first_seen_iso") or "") >= v)
+        elif key == "first_seen_before":
+            preds.append(lambda d, v=val: (d.get("first_seen_iso") or "9999-12-31") <= v)
+        # Match
+        elif key == "country":
+            v = val.upper()
+            preds.append(lambda d, v=v: (d.get("country") or "").upper() == v)
+        elif key == "platform":
+            v = val.lower()
+            preds.append(lambda d, v=v: (d.get("platform") or "").lower() == v)
+        elif key == "advertiser_contains":
+            v = val.lower()
+            preds.append(lambda d, v=v: (
+                v in (d.get("advertiser_name") or "").lower()
+            ))
+        else:
+            raise ValueError(
+                f"unknown filter key {key!r}. Supported: "
+                f"min/max_impressions, min/max_spend, min/max_days_running, "
+                f"min/max_score, is_active, has_video, has_image, has_landing, "
+                f"first/last_seen_after, first/last_seen_before, country, "
+                f"platform, advertiser_contains"
+            )
+    return preds
 
 
 def _resolve_proxy_url(spec: Optional[str]) -> Optional[str]:
@@ -1335,6 +1495,16 @@ def main():
     )
     asp.add_argument("--json", action="store_true",
                      help="Output as JSON")
+    asp.add_argument(
+        "--filter", "-f",
+        action="append",
+        default=[],
+        help="Post-collection filter on AdRecord fields. Repeat for AND. "
+             "Examples: -f has_video=true -f min_impressions=10000 "
+             "-f country=US -f advertiser_contains=Nike -f "
+             "last_seen_after=2026-04-01. See cli.py:_parse_ad_filters "
+             "for the full key list.",
+    )
 
     # ads-download — download every image / video URL from an ad-engine JSONL
     adp = sub.add_parser(

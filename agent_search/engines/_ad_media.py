@@ -184,6 +184,44 @@ class AdMediaDownloader:
     # ── extraction helpers (record → list of (url, kind) tuples) ─────
 
     @staticmethod
+    def _quality_score(url: str, kind: str) -> int:
+        """Heuristic quality rank — higher is better.
+
+        Used so ``max_per_record=1`` always returns the most
+        representative asset (typically a 1080p video). Order:
+
+            video_hd > video > video_sd > image > thumbnail > preview > media
+
+        Resolution hints in the URL bump the score. Two URLs with the
+        same kind but different resolutions thus rank deterministically.
+        """
+        kind_base = {
+            "video":     100,
+            "video_hd":  105,   # explicit hd label wins narrowly over plain video
+            "video_sd":  90,
+            "image":     50,
+            "media":     40,
+            "thumbnail": 30,
+            "preview":   20,
+            "other":     10,
+        }.get(kind, 10)
+
+        bonus = 0
+        u = url.lower()
+        if "1080p" in u or "1080" in u:
+            bonus += 10
+        elif "720p" in u or "720" in u:
+            bonus += 5
+        elif "540p" in u or "540" in u:
+            bonus += 3
+        elif "480p" in u or "480" in u:
+            bonus += 1
+        # Penalise obvious low-res / placeholder paths
+        if any(s in u for s in ("/thumb_", "_small", "/preview/", "_lowres")):
+            bonus -= 5
+        return kind_base + bonus
+
+    @staticmethod
     def _extract_urls(record: Any) -> list[tuple[str, str]]:
         """Pull (url, kind) pairs from any of the supported input shapes.
 
@@ -242,7 +280,9 @@ class AdMediaDownloader:
             _add(c.get("image_url"), "image")
             _add(c.get("thumbnail_url"), "thumbnail")
 
-        # Dedup preserving order.
+        # Dedup preserving order, then re-rank by quality score so the
+        # highest-resolution asset of each kind ends up first. This
+        # makes max_per_record=1 deterministically pick the best file.
         seen: set[str] = set()
         uniq: list[tuple[str, str]] = []
         for u, k in out:
@@ -250,6 +290,10 @@ class AdMediaDownloader:
                 continue
             seen.add(u)
             uniq.append((u, k))
+        # Stable-sort by quality desc; preserves original order for ties.
+        uniq.sort(
+            key=lambda pair: -AdMediaDownloader._quality_score(pair[0], pair[1]),
+        )
         return uniq
 
     @staticmethod

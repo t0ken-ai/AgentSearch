@@ -40,6 +40,48 @@ from agent_search.engines.base import SearchResult
 # ── 1. offline helpers ──────────────────────────────────────────────
 
 
+def t_quality_score() -> int:
+    """Higher resolution / larger asset should score higher."""
+    q = AdMediaDownloader._quality_score
+    fail = 0
+    if not (q("https://v/x.mp4", "video") > q("https://i/x.jpg", "image")):
+        print("  FAIL: video should outrank image"); fail += 1
+    if not (q("https://i/x.jpg", "image") > q("https://t/x.jpg", "thumbnail")):
+        print("  FAIL: image should outrank thumbnail"); fail += 1
+    if not (q("https://v/1080p.mp4", "video") > q("https://v/720p.mp4", "video")):
+        print("  FAIL: 1080p should outrank 720p"); fail += 1
+    if not (q("https://v/720p.mp4", "video") > q("https://v/540p.mp4", "video")):
+        print("  FAIL: 720p should outrank 540p"); fail += 1
+    # Penalty paths
+    if not (q("https://x/full.png", "image") > q("https://x/thumb_full.png", "image")):
+        print("  FAIL: thumb_ path should be penalised"); fail += 1
+    if fail == 0:
+        print("  PASS: quality score ordering")
+    return fail
+
+
+def t_extract_urls_ranked() -> int:
+    """A video at 720p should outrank both images on the same record."""
+    r = SearchResult(title="x", url="x", snippet="")
+    r.__dict__.update({
+        "ad_archive_id": "A1",
+        "image_urls": ["https://i/full.png", "https://i/thumb_small.png"],
+        "video_url": "https://v/720p.mp4",
+    })
+    urls = AdMediaDownloader._extract_urls(r)
+    if not urls or urls[0][0] != "https://v/720p.mp4":
+        print(f"  FAIL: expected video first, got {urls}")
+        return 1
+    # Image full should outrank image thumb
+    image_urls = [u for u, k in urls if k == "image"]
+    if image_urls != ["https://i/full.png", "https://i/thumb_small.png"]:
+        print(f"  FAIL: image order wrong: {image_urls}")
+        return 1
+    print(f"  PASS: extract_urls ranks by quality "
+          f"(top: {urls[0][0]})")
+    return 0
+
+
 def t_ext_from_url() -> int:
     fail = 0
     cases = [
@@ -347,6 +389,8 @@ def main() -> int:
         ("ext_from_url",         t_ext_from_url),
         ("ext_from_content",     t_ext_from_content_type),
         ("safe_token",           t_safe_token),
+        ("quality_score",        t_quality_score),
+        ("extract_urls_ranked",  t_extract_urls_ranked),
         ("extract_urls_meta",    t_extract_urls_meta),
         ("extract_urls_tiktok",  t_extract_urls_tiktok_cc),
         ("extract_urls_google",  t_extract_urls_google),
