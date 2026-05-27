@@ -89,6 +89,34 @@ _RPC_LOOKUP = "/anji/_/rpc/LookupService/GetCreativeById"
 
 _BASE_URL = "https://adstransparency.google.com"
 
+# Headers used by the raw-HTTP transport. Mirrors a desktop Chrome 145
+# request closely enough that ATC accepts them without an attached
+# session beyond what ``GET /`` deposits in cookies. We deliberately
+# avoid CloakBrowser's stealth headers because those plus a residential
+# proxy egress trigger an ATC challenge that prevents navigation entirely.
+_RAW_HEADERS = {
+    "accept": (
+        "text/html,application/xhtml+xml,application/xml;q=0.9,"
+        "image/avif,image/webp,image/apng,*/*;q=0.8,"
+        "application/signed-exchange;v=b3;q=0.7"
+    ),
+    "accept-language": "en-US,en;q=0.9",
+    "sec-ch-ua": (
+        '"Chromium";v="145", "Not_A Brand";v="24", "Google Chrome";v="145"'
+    ),
+    "sec-ch-ua-mobile": "?0",
+    "sec-ch-ua-platform": '"Windows"',
+    "sec-fetch-dest": "document",
+    "sec-fetch-mode": "navigate",
+    "sec-fetch-site": "none",
+    "sec-fetch-user": "?1",
+    "upgrade-insecure-requests": "1",
+    "user-agent": (
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+        "(KHTML, like Gecko) Chrome/145.0.0.0 Safari/537.36"
+    ),
+}
+
 # Format integer codes — observed values from production responses.
 _FORMAT_MAP = {
     1: "text",
@@ -238,6 +266,84 @@ def _extract_youtube_video_id(url: str) -> Optional[str]:
 
 
 # ---------------------------------------------------------------------------
+# Raw HTTP transport helpers (used when CloakBrowser + residential proxy is
+# blocked by ATC's stealth checks)
+# ---------------------------------------------------------------------------
+
+
+def _build_raw_session(proxy_url: Optional[str] = None,
+                       timeout: int = 30):
+    """Construct a ``requests.Session`` for the raw RPC transport.
+
+    The session is pre-loaded with realistic Chrome headers. When
+    ``proxy_url`` is provided (e.g. ``http://USER:PASS@host:port``) the
+    session routes both HTTP and HTTPS traffic through it. The session
+    keeps cookies across calls so the RPC POSTs receive the same
+    ``NID`` / ``CONSENT`` cookies that ATC plants on the homepage GET.
+
+    The optional ``timeout`` is stashed as ``session.request_timeout``
+    so callers can use it as the default ``timeout=`` value on each
+    request without re-deriving it.
+    """
+    import requests  # late-imported so the module loads even when
+                     # requests isn't installed (it usually is, since
+                     # cloakbrowser ships with it transitively).
+
+    session = requests.Session()
+    session.headers.update(_RAW_HEADERS)
+    if proxy_url:
+        session.proxies.update({"http": proxy_url, "https": proxy_url})
+    # Custom attribute — requests.Session accepts this without complaint.
+    session.request_timeout = timeout  # type: ignore[attr-defined]
+    return session
+
+
+def _raw_warm(session, region: str = "anywhere") -> bool:
+    """GET the ATC homepage so the session picks up baseline cookies.
+
+    Returns ``True`` when the warm-up succeeded. Callers can ignore the
+    return value — the RPCs degrade gracefully without cookies on most
+    endpoints, and the warm-up failing usually means the proxy itself
+    is misbehaving (which the RPC POST will surface anyway).
+    """
+    try:
+        r = session.get(
+            f"{_BASE_URL}/?region={region.lower()}",
+            timeout=session.request_timeout,
+        )
+        return 200 <= r.status_code < 400
+    except Exception as e:
+        log.debug("[g_ads/raw] warm-up GET failed: %s", e)
+        return False
+
+
+def _raw_post_rpc(session, rpc_path: str,
+                  req_body: dict) -> Optional[dict]:
+    """POST a single RPC and return the JSON body, or ``None`` on
+    transport failure / non-JSON response."""
+    import requests
+    url = f"{_BASE_URL}{rpc_path}"
+    data = {"f.req": json.dumps(req_body)}
+    try:
+        r = session.post(
+            url,
+            data=data,
+            params={"authuser": "0"},
+            timeout=session.request_timeout,
+        )
+    except requests.exceptions.RequestException as e:
+        log.warning("[g_ads/raw] POST %s failed: %s", rpc_path, e)
+        return None
+    if r.status_code != 200:
+        log.warning("[g_ads/raw] POST %s returned %d", rpc_path, r.status_code)
+        return None
+    try:
+        return r.json()
+    except ValueError:
+        return None
+
+
+# ---------------------------------------------------------------------------
 # Engine
 # ---------------------------------------------------------------------------
 
@@ -256,6 +362,52 @@ class GoogleAdTransparencyEngine(BaseEngine):
     def __init__(self, page):
         super().__init__(page)
         self.last_status: dict = {}
+        # ``transport`` distinguishes the two execution paths:
+        #   "browser" — navigate + intercept GraphQL via Playwright
+        #               (default; works without a proxy from clean IPs).
+        #   "raw"     — direct ``requests`` POST to the RPC endpoints
+        #               (use via :meth:`raw` factory; required when a
+        #               proxy is in play because cloakbrowser+proxy+
+        #               Google's stealth combine to block navigation).
+        self.transport = "browser"
+        self._raw_session = None
+
+    @classmethod
+    def raw(cls, *, proxy_url: Optional[str] = None,
+            timeout: int = 30) -> "GoogleAdTransparencyEngine":
+        """Build a page-less engine that talks straight to ATC's RPC
+        endpoints over plain ``requests``.
+
+        Use this when your environment requires a proxy. The browser-
+        based transport doesn't survive the cloakbrowser+residential-
+        proxy+Google triangle (ATC drops the connection during
+        stealth fingerprint checks); the raw transport sidesteps that
+        entirely while still routing through whatever proxy you pass.
+
+        Args:
+            proxy_url: Full ``http(s)://[user:pass@]host:port`` URL.
+                ``None`` → direct connection.
+            timeout:   Per-request timeout in seconds.
+
+        Returns:
+            A configured engine instance whose :meth:`search` method
+            uses HTTP RPC instead of the browser.
+        """
+        eng = cls.__new__(cls)
+        eng.page = None  # type: ignore[assignment]
+        eng.last_status = {}
+        eng.transport = "raw"
+        eng._raw_session = _build_raw_session(proxy_url, timeout)
+        eng._raw_warm_done = False
+        return eng
+
+    def _ensure_raw_warm(self, region: str) -> None:
+        if self.transport != "raw" or self._raw_session is None:
+            return
+        if getattr(self, "_raw_warm_done", False):
+            return
+        _raw_warm(self._raw_session, region)
+        self._raw_warm_done = True
 
     # ------------------------------------------------------------------ public API
 
@@ -284,7 +436,11 @@ class GoogleAdTransparencyEngine(BaseEngine):
                 f"agent_search/engines/_google_atc_options/regions.py"
             )
 
-        self.last_status = {"mode": m, "region": region_norm, "query": query}
+        self.last_status = {"mode": m, "region": region_norm, "query": query,
+                            "transport": self.transport}
+
+        # Raw transport needs a one-time homepage GET to bank cookies.
+        self._ensure_raw_warm(region_norm)
 
         if m == "search_advertisers":
             return self._search_advertisers(query, limit, region_norm)
@@ -303,6 +459,26 @@ class GoogleAdTransparencyEngine(BaseEngine):
 
     def _search_advertisers(self, query: str, limit: int,
                             region: str) -> list[SearchResult]:
+        if self.transport == "raw":
+            body = _raw_post_rpc(
+                self._raw_session, _RPC_SUGGEST,
+                {"1": query, "2": 10, "3": 10},
+            )
+            if body is None:
+                self.last_status["error"] = (
+                    "raw POST SearchSuggestions returned no parseable JSON"
+                )
+                return []
+            entries = body.get("1") or []
+            results: list[SearchResult] = []
+            for entry in entries[:limit]:
+                r = self._suggestion_to_result(entry, region)
+                if r:
+                    results.append(r)
+            self.last_status["found"] = len(results)
+            return results
+
+        # ── browser transport (default) ─────────────────────────────
         captured = self._capture_rpc(_RPC_SUGGEST, _BASE_URL +
                                      f"/?region={region.lower()}&hl=en",
                                      setup=lambda: self._fill_search_box(query),
@@ -386,6 +562,43 @@ class GoogleAdTransparencyEngine(BaseEngine):
 
     def _domain_search(self, domain: str, limit: int,
                        region: str) -> list[SearchResult]:
+        if self.transport == "raw":
+            # block-town's documented shape: SearchCreatives by-domain
+            # returns the top advertisers running ads from the domain.
+            body = _raw_post_rpc(
+                self._raw_session, _RPC_CREATIVES,
+                {
+                    "1": domain,
+                    "2": 1,
+                    "3": {"12": {"1": domain}},
+                    "7": {"1": 1},
+                },
+            )
+            if body and (ads := body.get("1") or []):
+                ad = ads[0]
+                adv_id = str(ad.get("1") or "")
+                name = str(ad.get("12") or "")
+                if adv_id:
+                    url = (
+                        f"{_BASE_URL}/advertiser/{adv_id}"
+                        f"?region={region.lower()}"
+                    )
+                    r = SearchResult(
+                        title=name or domain, url=url,
+                        snippet=f"domain={domain}",
+                    )
+                    r.__dict__.update({
+                        "advertiser_id": adv_id,
+                        "advertiser_name": name,
+                        "domain": domain,
+                        "region": region,
+                        "result_type": "advertiser_by_domain",
+                    })
+                    return [r]
+            # Fallback: treat as keyword.
+            return self._search_advertisers(domain, limit, region)
+
+        # ── browser transport ──────────────────────────────────────
         # Strategy: navigate to homepage, type the domain in the search box.
         # The SPA fires SearchCreatives with the by-domain shape ─ which we
         # capture. Falls back to SearchSuggestions if SearchCreatives is empty.
@@ -431,6 +644,33 @@ class GoogleAdTransparencyEngine(BaseEngine):
                 advertiser_id[:30],
             )
 
+        if self.transport == "raw":
+            req: dict = {
+                "2": min(max(limit, page_size), 100),
+                "3": {
+                    "12": {"1": "", "2": True},
+                    "13": {"1": [advertiser_id]},
+                },
+                "7": {"1": 1},
+            }
+            r_num = _region_num(region)
+            if r_num is not None:
+                req["3"]["8"] = [r_num]
+
+            body = _raw_post_rpc(self._raw_session, _RPC_CREATIVES, req)
+            if body is None:
+                self.last_status["error"] = (
+                    "raw POST SearchCreatives returned no parseable JSON"
+                )
+                return []
+            rows = body.get("1") or []
+            self.last_status["next_page_id"] = body.get("2")
+            results: list[SearchResult] = []
+            for ad in rows[:limit]:
+                results.append(self._creative_summary(ad, advertiser_id, region))
+            return results
+
+        # ── browser transport ──────────────────────────────────────
         url = (
             f"{_BASE_URL}/advertiser/{advertiser_id}"
             f"?region={region.lower()}&hl=en"
@@ -455,43 +695,79 @@ class GoogleAdTransparencyEngine(BaseEngine):
 
     def _creative_summary(self, ad: dict, advertiser_id: str,
                           region: str) -> SearchResult:
-        # SearchCreatives row shape (May 2026):
-        #   {"1": <name?>, "2": <creative_id>,
-        #    "3": {"1": <format_int>, ...},
-        #    "5": {"1": <first_shown_ms>, "2": <last_shown_ms>},
-        #    "9": <region>, "12": <text_summary>}
+        """Convert one ``SearchCreatives.results[i]`` dict into a
+        :class:`SearchResult`.
+
+        Two schemas observed in the wild — the raw POST response (May
+        2026) puts ``format_int`` at top-level ``"4"`` and timestamps as
+        epoch *seconds* under ``"6"["1"]`` / ``"7"["1"]``. The browser-
+        intercepted response (May 2026) used ``"3"["1"]`` for format and
+        ``"5"["1"]`` / ``"5"["2"]`` for ms timestamps. We probe both.
+        """
         cid = str(ad.get("2") or ad.get("1") or "")
-        fmt_block = ad.get("3") or {}
-        fmt_int = fmt_block.get("1") if isinstance(fmt_block, dict) else None
-        fmt_subtype = fmt_block.get("2") if isinstance(fmt_block, dict) else None
+
+        # Format: prefer top-level "4" (raw), else nested "3"."1" (browser).
+        fmt_int = None
+        fmt_subtype = None
+        top4 = ad.get("4")
+        if isinstance(top4, int):
+            fmt_int = top4
+        else:
+            n3 = ad.get("3")
+            if isinstance(n3, dict) and isinstance(n3.get("1"), int):
+                fmt_int = n3["1"]
+                fmt_subtype = n3.get("2") if isinstance(n3.get("2"), int) else None
         fmt = _FORMAT_MAP.get(fmt_int, str(fmt_int) if fmt_int else "")
-        dates = ad.get("5") or {}
-        first_ms = dates.get("1") if isinstance(dates, dict) else None
-        last_ms = dates.get("2") if isinstance(dates, dict) else None
-        text_summary = str(ad.get("12") or "")
+
+        # Timestamps: raw schema has them in "6"/"7" as epoch seconds,
+        # browser schema in "5" as epoch ms.
+        first_ms = first_seconds = None
+        last_ms = last_seconds = None
+        n6 = ad.get("6")
+        n7 = ad.get("7")
+        if isinstance(n6, dict):
+            first_seconds = self._coerce_int(n6.get("1"))
+        if isinstance(n7, dict):
+            last_seconds = self._coerce_int(n7.get("1"))
+        n5 = ad.get("5")
+        if first_seconds is None and isinstance(n5, dict):
+            first_ms = self._coerce_int(n5.get("1"))
+        if last_seconds is None and isinstance(n5, dict):
+            last_ms = self._coerce_int(n5.get("2"))
+
+        if first_seconds is not None and first_ms is None:
+            first_ms = first_seconds * 1000
+        if last_seconds is not None and last_ms is None:
+            last_ms = last_seconds * 1000
+
+        days = None
+        if first_ms is not None and last_ms is not None:
+            days = max(0, int((last_ms - first_ms) / (1000 * 86400)))
+
+        # ``"12"`` doubles as text summary in the browser schema and as
+        # advertiser display name in the raw schema. We expose it under
+        # both keys so consumers can pick whichever they expect.
+        adv_or_text = str(ad.get("12") or "")
         country = str(ad.get("9") or region)
+
+        # Best-effort link / image extraction.
+        link = self._extract_search_row_link(ad)
 
         ad_url = (
             f"{_BASE_URL}/advertiser/{advertiser_id}/creative/{cid}"
             f"?region={region.lower()}&hl=en" if cid else
             f"{_BASE_URL}/advertiser/{advertiser_id}?region={region.lower()}"
         )
-        days = None
-        if first_ms and last_ms:
-            try:
-                days = int((int(last_ms) - int(first_ms)) / (1000 * 86400))
-            except Exception:
-                days = None
         snippet_parts = []
         if fmt:
             snippet_parts.append(fmt)
         if days is not None:
             snippet_parts.append(f"{days}d running")
-        if text_summary:
-            snippet_parts.append(text_summary[:120])
+        if adv_or_text:
+            snippet_parts.append(adv_or_text[:120])
 
         r = SearchResult(
-            title=text_summary[:140] or cid,
+            title=adv_or_text[:140] or cid,
             url=ad_url,
             snippet=" · ".join(snippet_parts),
         )
@@ -508,10 +784,64 @@ class GoogleAdTransparencyEngine(BaseEngine):
             "days_running": days,
             "country": country,
             "region": region,
-            "text_summary": text_summary,
+            "text_summary": adv_or_text,
+            "advertiser_display_name": adv_or_text,
+            "preview_link": link,
+            "image_url": link if link and self._looks_like_image(link) else "",
             "raw": ad,
         })
         return r
+
+    @staticmethod
+    def _coerce_int(value: Any) -> Optional[int]:
+        if value is None or value == "":
+            return None
+        try:
+            return int(value)
+        except (TypeError, ValueError):
+            try:
+                return int(float(value))
+            except (TypeError, ValueError):
+                return None
+
+    @staticmethod
+    def _looks_like_image(url: str) -> bool:
+        if not url:
+            return False
+        return any(x in url for x in (
+            "simgad", ".png", ".jpg", ".jpeg", ".gif", ".webp",
+            "googlesyndication.com",
+        ))
+
+    @staticmethod
+    def _extract_search_row_link(ad: dict) -> str:
+        """Walk a SearchCreatives row's ``"3"`` block to find an image
+        ``src=`` or a displayads preview URL.
+
+        Two shapes observed:
+            - image:    ad["3"]["3"]["2"] = '<img src="...">'
+            - display:  ad["3"]["1"]["4"] = 'https://displayads-...'
+        """
+        n3 = ad.get("3")
+        if not isinstance(n3, dict):
+            return ""
+        # Image: ad["3"]["3"]["2"] ~ '<img src="..."  ...>'
+        n3_3 = n3.get("3")
+        if isinstance(n3_3, dict):
+            raw = n3_3.get("2")
+            if isinstance(raw, str):
+                if 'src="' in raw:
+                    return raw.split('src="', 1)[1].split('"', 1)[0]
+                if "'" in raw:
+                    return raw.split("'", 1)[1].split("'", 1)[0]
+                return raw
+        # Display / video preview: ad["3"]["1"]["4"]
+        n3_1 = n3.get("1")
+        if isinstance(n3_1, dict):
+            v = n3_1.get("4")
+            if isinstance(v, str):
+                return v
+        return ""
 
     # ------------------------------------------------------------------ creative_detail
 
@@ -524,6 +854,27 @@ class GoogleAdTransparencyEngine(BaseEngine):
                 "advertiser_id=... creative_id=..."
             )
             return []
+
+        if self.transport == "raw":
+            body = _raw_post_rpc(
+                self._raw_session, _RPC_LOOKUP,
+                {"1": advertiser_id, "2": creative_id, "5": {"1": 1}},
+            )
+            if body is None:
+                self.last_status["error"] = (
+                    "raw POST GetCreativeById returned no parseable JSON"
+                )
+                return []
+            ad = body.get("1") or {}
+            if not ad:
+                return []
+            return [self._creative_detail_to_result(
+                ad, advertiser_id, creative_id, region,
+                page_url=(f"{_BASE_URL}/advertiser/{advertiser_id}/"
+                          f"creative/{creative_id}?region={region.lower()}"),
+            )]
+
+        # ── browser transport ──────────────────────────────────────
         url = (
             f"{_BASE_URL}/advertiser/{advertiser_id}/creative/{creative_id}"
             f"?region={region.lower()}&hl=en"
@@ -536,7 +887,13 @@ class GoogleAdTransparencyEngine(BaseEngine):
         ad = captured.get("1") or {}
         if not ad:
             return []
+        return [self._creative_detail_to_result(
+            ad, advertiser_id, creative_id, region, page_url=url,
+        )]
 
+    def _creative_detail_to_result(self, ad: dict, advertiser_id: str,
+                                   creative_id: str, region: str,
+                                   *, page_url: str) -> SearchResult:
         format_int = ad.get("8")
         fmt = _FORMAT_MAP.get(format_int, str(format_int) if format_int else "")
         last_shown_ms = (ad.get("4") or {}).get("1")
@@ -568,7 +925,6 @@ class GoogleAdTransparencyEngine(BaseEngine):
             ytid = _extract_youtube_video_id(link)
             if ytid:
                 content["youtube_video_id"] = ytid
-        # else: leave preview_url only
 
         title = content["headline"] or content["destination_url"] or creative_id
         snippet_parts = [fmt] if fmt else []
@@ -577,7 +933,7 @@ class GoogleAdTransparencyEngine(BaseEngine):
         if content["description"]:
             snippet_parts.append(content["description"])
 
-        r = SearchResult(title=title[:200], url=url,
+        r = SearchResult(title=title[:200], url=page_url,
                          snippet=" · ".join(snippet_parts))
         r.__dict__.update({
             "advertiser_id": advertiser_id,
@@ -596,7 +952,7 @@ class GoogleAdTransparencyEngine(BaseEngine):
             "region": region,
             "raw": ad,
         })
-        return [r]
+        return r
 
     # ------------------------------------------------------------------ helpers
 

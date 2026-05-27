@@ -188,6 +188,86 @@ def t_google_advertisers() -> int:
     return 0
 
 
+# --- Raw HTTP transport (recommended for proxy environments) -----------
+
+
+def _raw_engine():
+    """Return a Google ATC engine using the raw HTTP transport, routed
+    through ``FLUXISP_PROXY`` if set."""
+    return GoogleAdTransparencyEngine.raw(
+        proxy_url=os.environ.get("FLUXISP_PROXY"),
+        timeout=20,
+    )
+
+
+def t_google_raw_search_advertisers() -> int:
+    eng = _raw_engine()
+    results = eng.search("coinbase", limit=3, mode="search_advertisers",
+                         region="US")
+    print(f"  status: {eng.last_status}")
+    if not results:
+        print("  FAIL: 0 results")
+        return 1
+    advs = [r for r in results
+            if r.__dict__.get("result_type") == "advertiser"]
+    if not advs:
+        print(f"  FAIL: no advertiser results, got {[r.__dict__.get('result_type') for r in results]}")
+        return 1
+    print(f"  PASS: {len(advs)} advertisers")
+    for r in advs[:3]:
+        d = r.__dict__
+        print(f"    - {d['advertiser_name']} [{d['country']}] "
+              f"id={d['advertiser_id']} ads={d['ad_count']}")
+    return 0
+
+
+def t_google_raw_domain_to_ads() -> int:
+    """Chain: domain → advertiser_ads → creative_detail."""
+    eng1 = _raw_engine()
+    rs = eng1.search("nike.com", limit=1, mode="domain", region="anywhere")
+    if not rs or not rs[0].__dict__.get("advertiser_id"):
+        print(f"  FAIL: domain returned no advertiser, status={eng1.last_status}")
+        return 1
+    adv_id = rs[0].__dict__["advertiser_id"]
+    print(f"  domain → {rs[0].__dict__.get('advertiser_name')} ({adv_id})")
+
+    eng2 = _raw_engine()
+    rs2 = eng2.search(adv_id, limit=3, mode="advertiser_ads",
+                      region="anywhere")
+    if not rs2:
+        print(f"  FAIL: advertiser_ads 0 results")
+        return 1
+    cid = None
+    for r in rs2[:3]:
+        d = r.__dict__
+        print(f"    - cid={d['creative_id']} fmt={d['format']} "
+              f"first={d['first_seen_iso']} last={d['last_seen_iso']} "
+              f"days={d['days_running']} img={'yes' if d['image_url'] else 'no'}")
+        if not cid and d["creative_id"].startswith("CR"):
+            cid = d["creative_id"]
+
+    if not cid:
+        print("  FAIL: no creative_id to drill into")
+        return 1
+    eng3 = _raw_engine()
+    rs3 = eng3.search(f"{adv_id}:{cid}", mode="creative_detail",
+                      region="anywhere")
+    if not rs3:
+        print("  FAIL: creative_detail 0 results")
+        return 1
+    d = rs3[0].__dict__
+    has_content = bool(d.get("image_url") or d.get("video_url")
+                       or d.get("headline") or d.get("destination_url"))
+    if not has_content:
+        print(f"  FAIL: creative_detail returned nothing useful: {d}")
+        return 1
+    print(f"  detail: fmt={d['format']} headline={d['headline']!r} "
+          f"image={'yes' if d['image_url'] else ''} "
+          f"video={'yes' if d['video_url'] else ''}")
+    print("  PASS: domain → ads → detail chain")
+    return 0
+
+
 def main() -> int:
     print("=== ad live integration ===")
     print(f"FLUXISP_PROXY (host only): "
@@ -198,6 +278,8 @@ def main() -> int:
         ("tiktok_cc.top_ads",               t_tiktok_cc_top_ads),
         ("tiktok_cc.trending_hashtags",     t_tiktok_cc_trending_hashtags),
         ("google.search_advertisers",       t_google_advertisers),
+        ("google_raw.search_advertisers",   t_google_raw_search_advertisers),
+        ("google_raw.domain_chain",         t_google_raw_domain_to_ads),
     ]
     failures = 0
     for label, fn in cases:
