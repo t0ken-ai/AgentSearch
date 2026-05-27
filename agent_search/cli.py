@@ -503,6 +503,325 @@ def cmd_ads_download(args):
     return 0 if ok == len(results) else 2
 
 
+def cmd_ads(args):
+    """Cross-platform ad-creative search.
+
+    Fans out across one or more ad-library engines, normalizes every
+    output through :func:`_ad_base.to_ad_record`, and returns one
+    uniform stream of records ranked by recency / engagement.
+
+    Compared to ``agentsearch search -e meta_ad_library`` this command:
+      * does multi-platform dispatch (``--platform all`` runs all four).
+      * automatically picks the right transport for Google ATC under
+        a proxy (raw HTTP) — the per-engine ``search`` command would
+        run into the cloakbrowser+stealth+proxy block on ATC.
+      * normalizes the output schema across platforms so downstream
+        scripts don't have to know whether they're consuming Meta,
+        TikTok, or Google.
+    """
+    import json
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+    from .core import BrowserConfig, launch, new_page
+    from .engines._ad_base import to_ad_record
+
+    proxy_url = _resolve_proxy_url(args.proxy) if args.proxy else None
+    platforms = _expand_platforms(args.platform)
+
+    plans = []  # (label, runner_fn)
+    if "meta" in platforms:
+        plans.append(("meta", lambda: _run_meta_like(
+            "meta_ad_library", args, proxy_url)))
+    if "instagram" in platforms:
+        plans.append(("instagram", lambda: _run_meta_like(
+            "instagram_ad_library", args, proxy_url)))
+    if "tiktok" in platforms:
+        plans.append(("tiktok", lambda: _run_tiktok(args, proxy_url)))
+    if "google" in platforms:
+        plans.append(("google", lambda: _run_google(args, proxy_url)))
+
+    print(
+        f"Running {len(plans)} ad engine(s): {[p[0] for p in plans]} "
+        f"(proxy={'on' if proxy_url else 'off'})",
+        file=sys.stderr,
+    )
+
+    # Concurrency strategy: launching multiple cloakbrowser instances in
+    # parallel through the same proxy causes resource contention (we've
+    # seen 12s solo runs balloon to 38s with 0 results when 3 browsers
+    # share a Chromium pool + a residential proxy egress). So:
+    #   * Google with a proxy goes through raw HTTP — no browser, fast,
+    #     never contends — so it can run on its own thread.
+    #   * Meta / Instagram / TikTok all need a browser; we serialize
+    #     those by default (workers=1 effectively). Users with a
+    #     beefier setup can override via --workers.
+    google_raw_first = (
+        proxy_url is not None
+        and any(lbl == "google" for lbl, _ in plans)
+        and args.workers > 1
+    )
+
+    results_by_platform: dict[str, dict] = {}
+
+    if google_raw_first:
+        # Kick off Google in the background while the browser engines run.
+        google_plan = next((fn for lbl, fn in plans if lbl == "google"), None)
+        other_plans = [(lbl, fn) for lbl, fn in plans if lbl != "google"]
+
+        with ThreadPoolExecutor(max_workers=2) as ex:
+            google_fut = ex.submit(google_plan) if google_plan else None
+            for lbl, fn in other_plans:
+                try:
+                    results_by_platform[lbl] = fn()
+                except Exception as e:
+                    results_by_platform[lbl] = {
+                        "ok": False,
+                        "error": f"{type(e).__name__}: {e}",
+                        "results": [],
+                    }
+            if google_fut is not None:
+                try:
+                    results_by_platform["google"] = google_fut.result()
+                except Exception as e:
+                    results_by_platform["google"] = {
+                        "ok": False,
+                        "error": f"{type(e).__name__}: {e}",
+                        "results": [],
+                    }
+    elif args.workers > 1 and len(plans) > 1:
+        with ThreadPoolExecutor(max_workers=args.workers) as ex:
+            future_to_label = {ex.submit(fn): lbl for lbl, fn in plans}
+            for fut in as_completed(future_to_label):
+                lbl = future_to_label[fut]
+                try:
+                    results_by_platform[lbl] = fut.result()
+                except Exception as e:
+                    results_by_platform[lbl] = {
+                        "ok": False,
+                        "error": f"{type(e).__name__}: {e}",
+                        "results": [],
+                    }
+    else:
+        for lbl, fn in plans:
+            try:
+                results_by_platform[lbl] = fn()
+            except Exception as e:
+                results_by_platform[lbl] = {
+                    "ok": False,
+                    "error": f"{type(e).__name__}: {e}",
+                    "results": [],
+                }
+
+    # Flatten + normalize.
+    flat: list[dict] = []
+    for lbl, payload in results_by_platform.items():
+        for r in payload.get("results") or []:
+            try:
+                rec = to_ad_record(r)
+                d = rec.to_dict()
+                d["_platform_label"] = lbl
+                flat.append(d)
+            except Exception as e:
+                logging.warning("[ads] normalize %s record failed: %s", lbl, e)
+
+    # Sort by last_seen_iso desc, then days_running desc — recent +
+    # long-running ads bubble up first, which tends to be what an
+    # ad-creative researcher wants.
+    def _sort_key(d):
+        return (d.get("last_seen_iso") or "", d.get("days_running") or 0)
+    flat.sort(key=_sort_key, reverse=True)
+
+    if args.limit and len(flat) > args.limit:
+        flat = flat[:args.limit]
+
+    if args.json:
+        out = {
+            "query": args.query,
+            "platforms": list(results_by_platform.keys()),
+            "by_platform": {
+                lbl: {
+                    "ok": payload.get("ok", True),
+                    "error": payload.get("error"),
+                    "count": len(payload.get("results") or []),
+                    "elapsed_s": payload.get("elapsed_s"),
+                }
+                for lbl, payload in results_by_platform.items()
+            },
+            "count": len(flat),
+            "results": flat,
+        }
+        print(json.dumps(out, indent=2, ensure_ascii=False))
+    else:
+        for lbl, payload in results_by_platform.items():
+            status = "OK" if payload.get("ok", True) else "FAIL"
+            n = len(payload.get("results") or [])
+            err = payload.get("error", "")
+            elap = payload.get("elapsed_s", 0)
+            line = f"  [{lbl:>9}] {status:4}  {n:3} results  {elap:5.1f}s"
+            if err:
+                line += f"  err={err[:80]}"
+            print(line, file=sys.stderr)
+        print(file=sys.stderr)
+        for d in flat[:args.limit or len(flat)]:
+            preview = (d.get("copy_text") or "")[:80].replace("\n", " ")
+            print(
+                f"  {d['platform']:<12} {d['ad_id']:<20} "
+                f"{(d.get('advertiser_name') or '')[:25]:<25} "
+                f"{d.get('first_seen_iso') or '':<10} → "
+                f"{d.get('last_seen_iso') or '':<10}  "
+                f"{preview}"
+            )
+
+    return 0 if any(p.get("ok", True) for p in results_by_platform.values()) else 1
+
+
+_PLATFORM_ALIASES = {
+    "meta":      ["meta"],
+    "fb":        ["meta"],
+    "facebook":  ["meta"],
+    "ig":        ["instagram"],
+    "instagram": ["instagram"],
+    "tt":        ["tiktok"],
+    "tiktok":    ["tiktok"],
+    "google":    ["google"],
+    "g":         ["google"],
+    "all":       ["meta", "instagram", "tiktok", "google"],
+}
+
+
+def _expand_platforms(spec: str) -> list[str]:
+    parts = [p.strip().lower() for p in (spec or "all").split(",") if p.strip()]
+    out: list[str] = []
+    for p in parts:
+        for x in _PLATFORM_ALIASES.get(p, [p]):
+            if x not in out:
+                out.append(x)
+    return out
+
+
+def _ad_browser_cfg(proxy_url):
+    from .core import BrowserConfig
+    return BrowserConfig(headless=True, humanize=False, proxy=proxy_url)
+
+
+def _run_meta_like(engine_name: str, args, proxy_url) -> dict:
+    """Run meta_ad_library or instagram_ad_library."""
+    import time as _t
+    from .core import launch, new_page
+    started = _t.time()
+    browser = None
+    try:
+        engine_cls = _get_engine(engine_name)
+        browser = launch(_ad_browser_cfg(proxy_url))
+        page = new_page(browser)
+        eng = engine_cls(page)
+        results = eng.search(
+            args.query, limit=args.limit or 10,
+            country=args.country or "US",
+            status="active",
+        )
+        return {
+            "ok": True,
+            "results": [r.__dict__ for r in (results or [])],
+            "elapsed_s": round(_t.time() - started, 1),
+        }
+    except Exception as e:
+        return {
+            "ok": False,
+            "error": f"{type(e).__name__}: {e}",
+            "results": [],
+            "elapsed_s": round(_t.time() - started, 1),
+        }
+    finally:
+        if browser is not None:
+            try: browser.close()
+            except Exception: pass
+
+
+def _run_tiktok(args, proxy_url) -> dict:
+    """Run tiktok_creative_center.top_ads (the only mode that works
+    without TikTok-for-Business login)."""
+    import time as _t
+    from .core import launch, new_page
+    started = _t.time()
+    browser = None
+    try:
+        engine_cls = _get_engine("tiktok_creative_center")
+        browser = launch(_ad_browser_cfg(proxy_url))
+        page = new_page(browser)
+        eng = engine_cls(page)
+        results = eng.search(
+            args.query or "", limit=args.limit or 10,
+            mode="top_ads", period=7,
+            country_code=args.country or "US",
+        )
+        return {
+            "ok": True,
+            "results": [r.__dict__ for r in (results or [])],
+            "elapsed_s": round(_t.time() - started, 1),
+        }
+    except Exception as e:
+        return {
+            "ok": False,
+            "error": f"{type(e).__name__}: {e}",
+            "results": [],
+            "elapsed_s": round(_t.time() - started, 1),
+        }
+    finally:
+        if browser is not None:
+            try: browser.close()
+            except Exception: pass
+
+
+def _run_google(args, proxy_url) -> dict:
+    """Run google_ad_transparency.
+
+    When a proxy is in play, switch to the raw HTTP transport because
+    cloakbrowser + residential proxy + Google's stealth checks combine
+    to block navigation. Without a proxy, the browser path works.
+    """
+    import time as _t
+    from .core import launch, new_page
+    started = _t.time()
+    browser = None
+    try:
+        from .engines.google_ad_transparency import GoogleAdTransparencyEngine
+
+        if proxy_url:
+            eng = GoogleAdTransparencyEngine.raw(
+                proxy_url=proxy_url, timeout=20,
+            )
+            results = eng.search(
+                args.query, limit=args.limit or 10,
+                mode="search_advertisers",
+                region=args.country or "anywhere",
+            )
+        else:
+            browser = launch(_ad_browser_cfg(None))
+            page = new_page(browser)
+            eng = GoogleAdTransparencyEngine(page)
+            results = eng.search(
+                args.query, limit=args.limit or 10,
+                mode="search_advertisers",
+                region=args.country or "anywhere",
+            )
+        return {
+            "ok": True,
+            "results": [r.__dict__ for r in (results or [])],
+            "elapsed_s": round(_t.time() - started, 1),
+        }
+    except Exception as e:
+        return {
+            "ok": False,
+            "error": f"{type(e).__name__}: {e}",
+            "results": [],
+            "elapsed_s": round(_t.time() - started, 1),
+        }
+    finally:
+        if browser is not None:
+            try: browser.close()
+            except Exception: pass
+
+
 def _resolve_proxy_url(spec: Optional[str]) -> Optional[str]:
     """Resolve a CLI proxy spec into a usable URL.
 
@@ -636,8 +955,13 @@ _BUNDLES: dict[str, list[str]] = {
     # Ad intelligence — competitive creative research across the four
     # major public ad libraries. Returns image / video URLs + first/last
     # seen so a marketing agent can build evergreen swipe files.
-    "ads": ["meta_ad_library", "instagram_ad_library",
-            "google_ad_transparency", "tiktok_creative_center"],
+    # NOTE: ``agentsearch ads`` (the dedicated subcommand) is more powerful
+    # — it handles Google ATC's raw HTTP transport, normalizes results
+    # into AdRecord schema, and surfaces per-platform stats. This bundle
+    # is kept as a thin search-many wrapper for users who want the raw
+    # SearchResult dicts.
+    "ads-fanout": ["meta_ad_library", "instagram_ad_library",
+                   "google_ad_transparency", "tiktok_creative_center"],
     # Social-only ad creatives (skip Google text/shopping which has
     # very different format expectations).
     "social_ads": ["meta_ad_library", "instagram_ad_library",
@@ -974,6 +1298,44 @@ def main():
     # list-engines
     lp = sub.add_parser("list-engines", help="List available engines")
 
+    # ads — top-level cross-platform ad-creative search (fan-out + normalize)
+    asp = sub.add_parser(
+        "ads",
+        help="Cross-platform ad-creative search across Meta/Instagram/TikTok/Google",
+    )
+    asp.add_argument("query", help="Keyword (e.g. brand name, product, theme)")
+    asp.add_argument(
+        "--platform", "-p",
+        default="all",
+        help="Comma-separated platforms: meta / ig / tt / google / all "
+             "(default: all). Aliases: fb=meta, facebook=meta, instagram=ig, "
+             "tiktok=tt, g=google.",
+    )
+    asp.add_argument(
+        "--country", "-c",
+        default="US",
+        help="Country (ISO-3166 alpha-2 like US/GB/JP, or 'anywhere' for "
+             "Google). Default: US.",
+    )
+    asp.add_argument(
+        "--limit", "-n", type=int, default=10,
+        help="Max results across all platforms after merge (default: 10)",
+    )
+    asp.add_argument(
+        "--proxy",
+        default=os.environ.get("FLUXISP_PROXY"),
+        help="Proxy URL or 'env[:VAR]' or 'pool[:scheme]'. "
+             "Defaults to $FLUXISP_PROXY when set.",
+    )
+    asp.add_argument(
+        "--workers", type=int, default=1,
+        help="Parallel platform workers (default: 1 — safer when "
+             "multiple cloakbrowsers share one proxy egress; bump to 2-4 "
+             "if you have a beefy local + clean IPs)",
+    )
+    asp.add_argument("--json", action="store_true",
+                     help="Output as JSON")
+
     # ads-download — download every image / video URL from an ad-engine JSONL
     adp = sub.add_parser(
         "ads-download",
@@ -1164,6 +1526,8 @@ def main():
         sys.exit(cmd_extract(args))
     elif args.command == "list-engines":
         cmd_list_engines(args)
+    elif args.command == "ads":
+        sys.exit(cmd_ads(args))
     elif args.command == "ads-download":
         sys.exit(cmd_ads_download(args))
     elif args.command == "status":

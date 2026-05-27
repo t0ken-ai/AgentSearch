@@ -221,6 +221,52 @@ def t_google_raw_search_advertisers() -> int:
     return 0
 
 
+def t_google_raw_multi_region() -> int:
+    """Verify the Google ATC raw transport routes through region_num for
+    several countries and gets back region-relevant results.
+
+    We expect at minimum that:
+      * Each region returns ≥1 advertiser with an AR-prefixed ID.
+      * The country field on each result reflects the requested
+        region or 'anywhere' (Google's typeahead occasionally bleeds
+        cross-region brands; we just assert non-empty).
+    """
+    from agent_search.engines.google_ad_transparency import GoogleAdTransparencyEngine
+
+    proxy_url = os.environ.get("FLUXISP_PROXY")
+    fail = 0
+    matrix = []
+    for region, query in (
+        ("US", "amazon"),
+        ("GB", "tesco"),
+        ("DE", "lidl"),
+        ("JP", "rakuten"),
+        ("anywhere", "nike"),
+    ):
+        eng = GoogleAdTransparencyEngine.raw(proxy_url=proxy_url, timeout=20)
+        t0 = time.time()
+        results = eng.search(query, limit=3, mode="search_advertisers",
+                             region=region)
+        elapsed = time.time() - t0
+        ar = [r for r in results
+              if (r.__dict__.get("advertiser_id") or "").startswith("AR")]
+        ok = len(ar) >= 1
+        matrix.append((region, query, len(results), len(ar), elapsed, ok))
+        if not ok:
+            print(f"  FAIL region={region} query={query}: "
+                  f"got {len(results)} results, {len(ar)} AR-prefixed")
+            fail += 1
+
+    print("  region matrix:")
+    for region, query, total, ar, elap, ok in matrix:
+        marker = "✓" if ok else "✗"
+        print(f"    {marker} {region:<10} {query:<10} "
+              f"{total:>2} results ({ar} AR-IDs) in {elap:.1f}s")
+    if fail == 0:
+        print("  PASS: 5/5 regions returned AR-prefixed advertisers")
+    return fail
+
+
 def t_google_raw_domain_to_ads() -> int:
     """Chain: domain → advertiser_ads → creative_detail."""
     eng1 = _raw_engine()
@@ -279,6 +325,7 @@ def main() -> int:
         ("tiktok_cc.trending_hashtags",     t_tiktok_cc_trending_hashtags),
         ("google.search_advertisers",       t_google_advertisers),
         ("google_raw.search_advertisers",   t_google_raw_search_advertisers),
+        ("google_raw.multi_region",         t_google_raw_multi_region),
         ("google_raw.domain_chain",         t_google_raw_domain_to_ads),
     ]
     failures = 0

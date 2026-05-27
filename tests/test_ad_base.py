@@ -104,6 +104,47 @@ def _google_result() -> SearchResult:
     return r
 
 
+def test_google_search_advertisers() -> int:
+    """SearchSuggestions output (no creative_id, just AR-prefixed
+    advertiser_id) should still infer platform=google_atc."""
+    r = SearchResult(title="Coinbase", url="https://atc/x", snippet="")
+    r.__dict__.update({
+        "advertiser_id": "AR07375484949278752769",
+        "advertiser_name": "Coinbase",
+        "country": "US",
+        "ad_count": 3,
+        "ad_count_max": 3,
+        "result_type": "advertiser",
+        "region": "US",
+    })
+    rec = to_ad_record(r)
+    if rec.platform != "google_atc":
+        print(f"  FAIL: search_advertisers → platform={rec.platform!r}")
+        return 1
+    if not rec.advertiser_id.startswith("AR"):
+        print(f"  FAIL: lost advertiser_id: {rec.advertiser_id}")
+        return 1
+    print("  PASS: google search_advertisers → google_atc")
+    return 0
+
+
+def test_google_domain_result() -> int:
+    """domain mode result also has no creative_id; result_type='domain'
+    should not flip platform to anything other than google_atc."""
+    r = SearchResult(title="nike.com", url="https://atc", snippet="")
+    r.__dict__.update({
+        "domain": "nike.com",
+        "result_type": "domain",
+        "region": "US",
+    })
+    rec = to_ad_record(r)
+    if rec.platform != "google_atc":
+        print(f"  FAIL: domain typehead → platform={rec.platform!r}")
+        return 1
+    print("  PASS: google domain typehead → google_atc")
+    return 0
+
+
 def test_meta() -> int:
     rec = to_ad_record(_meta_result())
     fail = 0
@@ -215,6 +256,8 @@ def main() -> int:
         ("tiktok_cc",    test_tiktok_cc),
         ("tiktok_lib",   test_tiktok_lib),
         ("google_atc",   test_google),
+        ("google_search_advertisers", test_google_search_advertisers),
+        ("google_domain", test_google_domain_result),
         ("to_dict",      test_to_dict),
     ]:
         print(f"\n[{label}]")

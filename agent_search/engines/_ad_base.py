@@ -130,6 +130,14 @@ def to_ad_record(result: Any, *, platform: Optional[str] = None) -> AdRecord:
             p = "meta"
         elif d.get("creative_id") and d.get("advertiser_id"):
             p = "google_atc"
+        elif (d.get("result_type") in ("advertiser", "domain",
+                                        "advertiser_by_domain")
+              or (isinstance(d.get("advertiser_id"), str)
+                  and d["advertiser_id"].startswith("AR"))):
+            # Google ATC search_advertisers / domain results: an
+            # advertiser_id starting with AR is the canonical
+            # Google ATC marker, even when no creative_id is present.
+            p = "google_atc"
         elif d.get("brand_name") and d.get("ad_id"):
             p = "tiktok_cc"
         elif d.get("ad_id") and d.get("advertiser_name"):
