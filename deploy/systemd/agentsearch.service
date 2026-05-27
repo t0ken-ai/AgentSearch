@@ -1,0 +1,45 @@
+[Unit]
+Description=AgentSearch self-hosted HTTP API (CloakBrowser-backed search/extract)
+Documentation=https://github.com/t0ken-ai/AgentSearch
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=agentsearch
+Group=agentsearch
+WorkingDirectory=/opt/AgentSearch
+EnvironmentFile=/etc/agentsearch/env
+Environment=HOME=/var/lib/agentsearch
+Environment=XDG_CACHE_HOME=/var/lib/agentsearch/.cache
+Environment=XDG_DATA_HOME=/var/lib/agentsearch/.local/share
+# Default bind: 127.0.0.1:8088 — remote callers must SSH-tunnel:
+#   ssh -N -L 8088:127.0.0.1:8088 user@<server>
+# To expose publicly, change --host to 0.0.0.0 and set up firewall + token.
+ExecStart=/opt/AgentSearch/venv/bin/python -m agent_search.serve \
+    --host 127.0.0.1 --port 8088
+Restart=on-failure
+RestartSec=5
+StartLimitBurst=5
+StartLimitIntervalSec=60
+
+# Hardening
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=yes
+ReadWritePaths=/var/lib/agentsearch /var/log/agentsearch /tmp
+ProtectKernelModules=yes
+ProtectKernelTunables=yes
+ProtectControlGroups=yes
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX AF_NETLINK
+RestrictNamespaces=yes
+LockPersonality=yes
+
+# Logging — tail with: journalctl -u agentsearch -f
+# (we also append to a file for rotation flexibility)
+StandardOutput=append:/var/log/agentsearch/serve.log
+StandardError=append:/var/log/agentsearch/serve.log
+
+[Install]
+WantedBy=multi-user.target

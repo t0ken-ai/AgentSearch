@@ -1,0 +1,29 @@
+# AgentSearch runtime dependencies.
+#
+# This file mirrors the [project] / [project.optional-dependencies] sections
+# of pyproject.toml and is provided for environments that prefer
+# `pip install -r requirements.txt` (Docker, CI, plain venvs without TOML).
+#
+# pip install -r requirements.txt  installs everything: core + MCP + ad-library
+#                                  raw-HTTP transport + ad-media downloader.
+# pip install -e .                 also works and uses pyproject.toml.
+
+# ── Core ───────────────────────────────────────────────────────────────
+# Stealth Chromium with patched fingerprint — the entire scraping layer
+# of this project is built on top of it. CloakBrowser pulls in Playwright
+# (1.60+) automatically.
+cloakbrowser>=0.3.31
+
+# Used by `agentsearch extract` for readability + Markdown extraction.
+trafilatura>=2.0
+
+# ── Ad-library raw HTTP transport ──────────────────────────────────────
+# google_ad_transparency.GoogleAdTransparencyEngine.raw() needs requests
+# to bypass the cloakbrowser+stealth+proxy block on Google ATC.
+# AdMediaDownloader also uses requests for streaming downloads.
+requests>=2.30
+
+# ── MCP (Model Context Protocol) server ────────────────────────────────
+# Optional — only needed if you'll run `python -m agent_search.mcp_server`.
+# Skip this line in environments that don't host MCP.
+mcp>=1.0

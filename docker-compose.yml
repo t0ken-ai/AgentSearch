@@ -1,0 +1,44 @@
+# AgentSearch — single-service Compose file for local + small-VM
+# deployments.
+#
+# Quick start:
+#   1. cp deploy/systemd/env.example .env
+#   2. edit .env: fill AGENTSEARCH_TOKEN (openssl rand -hex 32) and
+#      optionally FLUXISP_PROXY
+#   3. docker compose up -d
+#   4. ssh -N -L 8088:127.0.0.1:8088 user@<server>  (from your laptop)
+#   5. curl -H "Authorization: Bearer $TOKEN" http://127.0.0.1:8088/health
+
+services:
+  agentsearch:
+    build: .
+    image: agentsearch:latest
+    container_name: agentsearch
+    restart: unless-stopped
+    # Bind to host loopback only — never expose to the open internet
+    # without TLS in front. SSH-tunnel from outside.
+    ports:
+      - "127.0.0.1:8088:8088"
+    env_file:
+      - .env
+    # CloakBrowser / Chromium spawn many small processes; the default
+    # 64 MiB shm is too tight and causes intermittent renderer crashes.
+    shm_size: "1g"
+    # Persist the patched Chromium binary + cookies between restarts so
+    # we don't redownload Chromium on every container restart.
+    volumes:
+      - agentsearch-state:/var/lib/agentsearch
+      - agentsearch-logs:/var/log/agentsearch
+    # Chromium occasionally hangs on a single tab; let docker restart us.
+    healthcheck:
+      test:
+        ["CMD-SHELL",
+         "curl -fsS -o /dev/null -w '%{http_code}' http://127.0.0.1:8088/health | grep -E '^(200|401)$$' >/dev/null"]
+      interval: 30s
+      timeout: 5s
+      start_period: 30s
+      retries: 3
+
+volumes:
+  agentsearch-state:
+  agentsearch-logs:

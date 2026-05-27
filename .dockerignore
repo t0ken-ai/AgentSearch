@@ -1,0 +1,52 @@
+# Trim what gets sent to the docker build context. Anything you add
+# here makes builds faster and smaller. The list mirrors .gitignore
+# plus repo-specific large directories.
+
+# Git / VCS metadata
+.git
+.gitignore
+.github
+
+# Python build / cache
+__pycache__/
+*.py[co]
+*.egg-info/
+build/
+dist/
+.tox/
+.pytest_cache/
+.venv/
+venv/
+*.egg
+
+# Tests aren't shipped to the runtime image — they only matter at dev time.
+# (We still keep the agent_search package which is referenced by the
+# Dockerfile COPY directive.)
+tests/
+
+# Editor / OS junk
+.idea
+.vscode
+*.swp
+.DS_Store
+Thumbs.db
+
+# Project-local artifacts
+ad_media/
+swipe_files/
+*.log
+.cache/
+
+# Research workspace (huge, irrelevant to runtime)
+docs/
+skills/
+README*.md
+LEGAL.md
+CHANGELOG.md
+AD_RESEARCH_PLAN.md
+MANIFEST.in
+Makefile
+
+# CloakBrowser caches anything we already have locally — never bake into
+# the image; let the container fetch on first run.
+.cloakbrowser/
