@@ -85,6 +85,68 @@ def t_dataclass() -> int:
     return 0
 
 
+def t_retry_helper() -> int:
+    """_request_with_retry: transient → retry, permanent → fail-fast,
+    5xx → retry up to max."""
+    from agent_search.engines._app_store import _request_with_retry
+    import requests
+    fail = 0
+
+    # Test 1: transient ConnectionError, succeed on attempt 3
+    attempts = [0]
+    def flaky():
+        attempts[0] += 1
+        if attempts[0] < 3:
+            raise requests.exceptions.ConnectionError("transient")
+        class R:
+            status_code = 200
+        return R()
+    try:
+        r = _request_with_retry(flaky, max_retries=3, backoff_base=0.01)
+        if attempts[0] != 3:
+            print(f"  FAIL: expected 3 attempts, got {attempts[0]}")
+            fail += 1
+    except Exception as e:
+        print(f"  FAIL: should have succeeded, raised {e}")
+        fail += 1
+
+    # Test 2: permanent (ValueError) → no retry
+    attempts = [0]
+    def perm():
+        attempts[0] += 1
+        raise ValueError("permanent")
+    try:
+        _request_with_retry(perm, max_retries=3, backoff_base=0.01)
+    except ValueError:
+        if attempts[0] != 1:
+            print(f"  FAIL: permanent retried {attempts[0]} times")
+            fail += 1
+    else:
+        print("  FAIL: ValueError should have raised")
+        fail += 1
+
+    # Test 3: 5xx → retry then raise
+    class R503:
+        status_code = 503
+    attempts = [0]
+    def server_err():
+        attempts[0] += 1
+        return R503()
+    try:
+        _request_with_retry(server_err, max_retries=2, backoff_base=0.01)
+    except requests.exceptions.HTTPError:
+        if attempts[0] != 3:  # 1 try + 2 retries
+            print(f"  FAIL: 5xx attempts {attempts[0]}, expected 3")
+            fail += 1
+    else:
+        print("  FAIL: 5xx should have raised after retries")
+        fail += 1
+
+    if fail == 0:
+        print("  PASS: retry helper (transient retried, permanent fast-fail, 5xx retried then raised)")
+    return fail
+
+
 # Live tests below — guarded so a no-network env still passes the unit
 # tier. Skip by setting AGENTSEARCH_SKIP_LIVE=1.
 
@@ -184,6 +246,7 @@ def main() -> int:
         ("classify",            t_classify),
         ("_domain_of",          t_domain),
         ("dataclass",           t_dataclass),
+        ("retry_helper",        t_retry_helper),
         ("live_apple",          t_live_apple_instagram),
         ("live_google",         t_live_google_shopify),
         ("live_one_shot",       t_live_one_shot),

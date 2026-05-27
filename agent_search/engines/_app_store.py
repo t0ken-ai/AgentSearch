@@ -31,6 +31,54 @@ from typing import Optional
 log = logging.getLogger(__name__)
 
 
+def _request_with_retry(callable_fn, *, max_retries: int = 2,
+                        backoff_base: float = 1.0):
+    """Call ``callable_fn()`` with retries on transient transport errors.
+
+    Distinguishes between:
+      * Transient (retry):  Timeout, ConnectionError, ProxyError, 5xx
+      * Final (no retry):   4xx, parse failures (these usually mean the
+                            target really doesn't have what we want)
+
+    Backoff: ``backoff_base * (2 ** attempt)`` plus a small jitter.
+
+    Returns whatever ``callable_fn`` returns. Re-raises the last
+    exception when all retries are exhausted.
+    """
+    import random
+    import time as _t
+    import requests
+    last_exc = None
+    for attempt in range(max_retries + 1):
+        try:
+            r = callable_fn()
+            # If we got a real Response, treat 5xx as transient.
+            if hasattr(r, "status_code") and 500 <= r.status_code < 600:
+                last_exc = requests.exceptions.HTTPError(
+                    f"HTTP {r.status_code}"
+                )
+                if attempt < max_retries:
+                    delay = backoff_base * (2 ** attempt) + random.uniform(0, 0.5)
+                    log.debug("[app_store] %s; retry in %.1fs", last_exc, delay)
+                    _t.sleep(delay)
+                    continue
+                raise last_exc
+            return r
+        except (requests.exceptions.Timeout,
+                requests.exceptions.ConnectionError,
+                requests.exceptions.ProxyError) as e:
+            last_exc = e
+            if attempt < max_retries:
+                delay = backoff_base * (2 ** attempt) + random.uniform(0, 0.5)
+                log.debug("[app_store] transient %s; retry in %.1fs",
+                          type(e).__name__, delay)
+                _t.sleep(delay)
+                continue
+            raise
+    if last_exc:
+        raise last_exc
+
+
 # ---------------------------------------------------------------------------
 # Data class
 # ---------------------------------------------------------------------------
@@ -155,23 +203,35 @@ def classify_app_url(url: str) -> tuple[str, Optional[str]]:
 
 def lookup_apple(app_id: str, *, country: str = "us",
                  proxies: Optional[dict] = None,
-                 timeout: int = 20) -> Optional[AppMetadata]:
+                 timeout: int = 20,
+                 max_retries: int = 2) -> Optional[AppMetadata]:
     """Look up an Apple App Store entry by numeric track id.
 
     No auth required. Backed by the public ``itunes.apple.com/lookup``
     endpoint which returns clean JSON. Optional ``country`` switches
     the storefront (US/GB/JP/KR/...). ``proxies`` is forwarded to
     ``requests`` so the call can be routed through a residential pool.
+
+    On transient transport errors (proxy timeout / connection reset /
+    5xx) the call retries up to ``max_retries`` times with exponential
+    backoff. A successful 200 response with ``resultCount=0`` is NOT
+    retried — that's a real "not found".
     """
     import requests
 
-    try:
-        r = requests.get(
+    session = requests.Session()
+    if proxies:
+        session.proxies.update(proxies)
+
+    def _fetch():
+        return session.get(
             "https://itunes.apple.com/lookup",
             params={"id": app_id, "country": country.lower()},
             timeout=timeout,
-            proxies=proxies,
         )
+
+    try:
+        r = _request_with_retry(_fetch, max_retries=max_retries)
         r.raise_for_status()
         data = r.json()
     except Exception as e:
@@ -269,29 +329,39 @@ _GP_CURRENCY = re.compile(r'"priceCurrency"\s*:\s*"([^"]*)"')
 
 def lookup_google(package: str, *, hl: str = "en",
                   proxies: Optional[dict] = None,
-                  timeout: int = 20) -> Optional[AppMetadata]:
+                  timeout: int = 20,
+                  max_retries: int = 2) -> Optional[AppMetadata]:
     """Look up a Google Play entry by package id (e.g. ``com.foo.bar``).
 
     Google Play has no public API for unauthenticated callers, so this
     fetches the SSR HTML at ``play.google.com/store/apps/details`` and
     runs three small regexes against the embedded JSON-LD blob.
+
+    Retries on transient transport errors (proxy timeout / connection
+    reset / 5xx). A 404 returns ``None`` immediately.
     """
     import requests
 
-    try:
-        r = requests.get(
+    session = requests.Session()
+    if proxies:
+        session.proxies.update(proxies)
+    session.headers.update({
+        "User-Agent": (
+            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+            "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/145 Safari/537.36"
+        ),
+        "Accept-Language": f"{hl},en;q=0.9",
+    })
+
+    def _fetch():
+        return session.get(
             "https://play.google.com/store/apps/details",
             params={"id": package, "hl": hl},
             timeout=timeout,
-            proxies=proxies,
-            headers={
-                "User-Agent": (
-                    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
-                    "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/145 Safari/537.36"
-                ),
-                "Accept-Language": f"{hl},en;q=0.9",
-            },
         )
+
+    try:
+        r = _request_with_retry(_fetch, max_retries=max_retries)
         if r.status_code == 404:
             return None
         r.raise_for_status()
