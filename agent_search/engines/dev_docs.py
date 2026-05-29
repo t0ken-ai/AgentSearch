@@ -90,7 +90,9 @@ _PRESETS: dict[str, list[str]] = {
 
     # ── Social platforms — developer / business / marketing portals ──
     # Each social platform exposes docs across several subdomains. The
-    # multi-host preset fans out to all of them.
+    # multi-host preset fans out to all of them. Entries with a path
+    # suffix (e.g. "developers.facebook.com/docs/whatsapp") narrow to
+    # one product within a megasite.
     "tiktok":              ["developers.tiktok.com",
                             "business-api.tiktok.com",
                             "ads.tiktok.com"],
@@ -99,16 +101,60 @@ _PRESETS: dict[str, list[str]] = {
     "tiktok-marketing":    ["business-api.tiktok.com",
                             "ads.tiktok.com"],
     "tiktok-login":        ["developers.tiktok.com"],
+
     # Snap, X (Twitter) and others' developer portals — same pattern.
     "snap":                ["developers.snap.com"],
-    "snapchat":            ["developers.snap.com"],
+    "snapchat":            ["developers.snap.com",
+                            "businesshelp.snapchat.com"],
+    "snap-marketing":      ["marketingapi.snapchat.com",
+                            "businesshelp.snapchat.com"],
     "twitter":             ["developer.x.com", "developer.twitter.com"],
     "x":                   ["developer.x.com", "developer.twitter.com"],
-    "linkedin":            ["learn.microsoft.com"],   # LinkedIn API docs moved to Microsoft Learn
+    "linkedin":            ["learn.microsoft.com/en-us/linkedin"],
     "pinterest":           ["developers.pinterest.com"],
     "reddit":              ["developers.reddit.com"],
-    "youtube":             ["developers.google.com"],
-    "google-ads":          ["developers.google.com"],
+    "youtube":             ["developers.google.com/youtube"],
+
+    # WhatsApp Business Platform — docs live under
+    # developers.facebook.com (the path under that host has been
+    # rotated several times: /docs/whatsapp/ → /documentation/
+    # business-messaging/whatsapp/). We narrow with the bare
+    # "whatsapp" keyword in the URL — survives any path rotation.
+    "whatsapp":            ["developers.facebook.com/whatsapp",
+                            "business.whatsapp.com",
+                            "faq.whatsapp.com"],
+    "whatsapp-business":   ["developers.facebook.com/whatsapp",
+                            "business.whatsapp.com"],
+    "whatsapp-cloud":      ["developers.facebook.com/whatsapp"],
+
+    # Telegram — Bot API + MTProto client API + TDLib.
+    "telegram":            ["core.telegram.org"],
+    "telegram-bot":        ["core.telegram.org/bots"],
+
+    # Meta megasite — covers everything fb_docs handles, available
+    # via the generic dev_docs interface. (fb_docs remains the more
+    # ergonomic entry point with 16 product slugs.)
+    "meta":                ["developers.facebook.com"],
+    "facebook":            ["developers.facebook.com"],
+    "instagram":           ["developers.facebook.com/instagram"],
+    "messenger":           ["developers.facebook.com/messenger"],
+    "threads":             ["developers.facebook.com/threads"],
+
+    # Google product-narrowed — the bare developers.google.com host
+    # bundles ~30 products, so each preset adds an inurl:<keyword>
+    # narrow.
+    "google-ads":          ["developers.google.com/google-ads"],
+    "google-analytics":    ["developers.google.com/analytics"],
+    "google-maps":         ["developers.google.com/maps"],
+    "google-pay":          ["developers.google.com/pay"],
+
+    # Other messaging / social platforms
+    "line":                ["developers.line.biz"],
+    "viber":               ["developers.viber.com"],
+    "wechat":              ["developers.weixin.qq.com",
+                            "wechatwiki.com"],
+    "wechat-pay":          ["pay.weixin.qq.com"],
+    "kakao":               ["developers.kakao.com"],
 
     # ── AI / ML ──
     "openai":          ["platform.openai.com"],
@@ -187,8 +233,22 @@ def list_platforms() -> list[str]:
 
 
 def resolve_platform(name: str) -> list[str]:
-    """Return the host list for a preset, empty when unknown."""
+    """Return the host list for a preset, empty when unknown.
+
+    Entries may be either bare hosts (``"docs.stripe.com"``) or
+    ``host/path-prefix`` pairs (``"developers.facebook.com/docs/whatsapp"``)
+    — the path narrows the site search via ``inurl:<path>``.
+    """
     return list(_PRESETS.get((name or "").lower(), []))
+
+
+def _split_host_path(spec: str) -> tuple[str, str]:
+    """Split ``"host/path"`` → ``(host, path)``.  Path may be ``""``."""
+    spec = spec.strip().lstrip("https://").lstrip("http://")
+    if "/" in spec:
+        host, path = spec.split("/", 1)
+        return host, path.strip("/")
+    return spec, ""
 
 
 # ---------------------------------------------------------------------------
@@ -319,10 +379,14 @@ class DevDocsEngine(BaseEngine):
 
         kept: list[SearchResult] = []
         seen: set[str] = set()
-        host_set = {h.lower() for h in hosts}
+        host_specs = [_split_host_path(h) for h in hosts]
         for r in results:
             url = (r.url or "").lower()
-            if not any(h in url for h in host_set):
+            # Match (host, path?) — both must appear in URL.
+            if not any(
+                host in url and (not path or path in url)
+                for host, path in host_specs
+            ):
                 continue
             if "translate.goog" in url or "/cache/" in url:
                 continue
@@ -330,7 +394,7 @@ class DevDocsEngine(BaseEngine):
                 continue
             seen.add(r.url)
             r.__dict__.update({
-                "doc_site": self._matching_host(url, host_set),
+                "doc_site": self._matching_host(url, host_specs),
                 "doc_section": self._infer_section(url),
                 "platform": resolved_platform,
                 "product": product or "",
@@ -359,10 +423,24 @@ class DevDocsEngine(BaseEngine):
                          product: Optional[str],
                          api_version: Optional[str]) -> str:
         parts: list[str] = []
+        # Each entry can be either "host" or "host/path-prefix". Path
+        # narrows via inurl: so a single preset can cover one product
+        # inside a megasite (e.g. WhatsApp docs live under
+        # developers.facebook.com/docs/whatsapp).
         if len(hosts) == 1:
-            parts.append(f"site:{hosts[0]}")
+            host, path = _split_host_path(hosts[0])
+            parts.append(f"site:{host}")
+            if path:
+                parts.append(f"inurl:{path}")
         else:
-            parts.append("(" + " OR ".join(f"site:{h}" for h in hosts) + ")")
+            site_atoms = []
+            for h in hosts:
+                host, path = _split_host_path(h)
+                if path:
+                    site_atoms.append(f"(site:{host} inurl:{path})")
+                else:
+                    site_atoms.append(f"site:{host}")
+            parts.append("(" + " OR ".join(site_atoms) + ")")
         parts.extend(cls._MODES.get(mode, []))
         if product:
             parts.append(f"inurl:{product}")
@@ -373,11 +451,11 @@ class DevDocsEngine(BaseEngine):
         return " ".join(parts)
 
     @staticmethod
-    def _matching_host(url: str, host_set: set[str]) -> str:
+    def _matching_host(url: str, host_specs: list[tuple[str, str]]) -> str:
         url_low = url.lower()
-        for h in host_set:
-            if h in url_low:
-                return h
+        for host, path in host_specs:
+            if host in url_low and (not path or path in url_low):
+                return f"{host}/{path}" if path else host
         return ""
 
     @staticmethod
