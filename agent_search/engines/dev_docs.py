@@ -88,6 +88,28 @@ _PRESETS: dict[str, list[str]] = {
     "mysql":           ["dev.mysql.com"],
     "elasticsearch":   ["www.elastic.co"],
 
+    # ── Social platforms — developer / business / marketing portals ──
+    # Each social platform exposes docs across several subdomains. The
+    # multi-host preset fans out to all of them.
+    "tiktok":              ["developers.tiktok.com",
+                            "business-api.tiktok.com",
+                            "ads.tiktok.com"],
+    "tiktok-business":     ["business-api.tiktok.com",
+                            "ads.tiktok.com"],
+    "tiktok-marketing":    ["business-api.tiktok.com",
+                            "ads.tiktok.com"],
+    "tiktok-login":        ["developers.tiktok.com"],
+    # Snap, X (Twitter) and others' developer portals — same pattern.
+    "snap":                ["developers.snap.com"],
+    "snapchat":            ["developers.snap.com"],
+    "twitter":             ["developer.x.com", "developer.twitter.com"],
+    "x":                   ["developer.x.com", "developer.twitter.com"],
+    "linkedin":            ["learn.microsoft.com"],   # LinkedIn API docs moved to Microsoft Learn
+    "pinterest":           ["developers.pinterest.com"],
+    "reddit":              ["developers.reddit.com"],
+    "youtube":             ["developers.google.com"],
+    "google-ads":          ["developers.google.com"],
+
     # ── AI / ML ──
     "openai":          ["platform.openai.com"],
     "anthropic":       ["docs.anthropic.com", "docs.claude.com"],
@@ -266,14 +288,34 @@ class DevDocsEngine(BaseEngine):
                 "See list_platforms() for known presets."
             )
 
-        ddg_query = self._build_ddg_query(
+        ddg_query_full = self._build_ddg_query(
             query, hosts, m, product, api_version,
         )
         log.info("[dev_docs/%s] %s",
-                 resolved_platform or hosts[0], ddg_query)
+                 resolved_platform or hosts[0], ddg_query_full)
 
-        # Pull more than asked so the post-filter has headroom.
-        results = self._ddg.search(ddg_query, limit=max(limit * 2, 20)) or []
+        # DDG handles "(site:a OR site:b)" poorly — it often returns
+        # zero results when the OR-combined site list spans different
+        # subdomains of the same brand (e.g.
+        # developers.tiktok.com OR business-api.tiktok.com). Fan out
+        # to one query per host and merge instead. Keeps the single-
+        # host fast path as is.
+        if len(hosts) == 1:
+            results = self._ddg.search(
+                ddg_query_full, limit=max(limit * 2, 20)) or []
+        else:
+            results = []
+            seen_urls: set[str] = set()
+            for host in hosts:
+                sub_q = self._build_ddg_query(
+                    query, [host], m, product, api_version,
+                )
+                for r in (self._ddg.search(sub_q, limit=limit * 2) or []):
+                    if r.url and r.url not in seen_urls:
+                        seen_urls.add(r.url)
+                        results.append(r)
+                if len(results) >= limit * 2:
+                    break
 
         kept: list[SearchResult] = []
         seen: set[str] = set()
@@ -304,7 +346,7 @@ class DevDocsEngine(BaseEngine):
             "mode": m,
             "product": product,
             "api_version": api_version,
-            "ddg_query": ddg_query,
+            "ddg_query": ddg_query_full,
             "raw_results": len(results),
             "kept": len(kept),
         }
