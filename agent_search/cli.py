@@ -34,6 +34,10 @@ _ALIASES: dict[str, tuple[str, str]] = {
     "tiktok_ads":  ("tiktok_ad_library", "TikTokAdLibraryEngine"),
     "ig_ads":      ("instagram_ad_library", "InstagramAdLibraryEngine"),
     "instagram_ads": ("instagram_ad_library", "InstagramAdLibraryEngine"),
+    # Meta developer documentation search
+    "fb_docs":     ("facebook_docs",      "FacebookDocsEngine"),
+    "meta_docs":   ("facebook_docs",      "FacebookDocsEngine"),
+    "fb_dev":      ("facebook_docs",      "FacebookDocsEngine"),
 }
 
 
