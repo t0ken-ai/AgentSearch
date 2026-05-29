@@ -244,7 +244,11 @@ def resolve_platform(name: str) -> list[str]:
 
 def _split_host_path(spec: str) -> tuple[str, str]:
     """Split ``"host/path"`` → ``(host, path)``.  Path may be ``""``."""
-    spec = spec.strip().lstrip("https://").lstrip("http://")
+    spec = spec.strip()
+    for prefix in ("https://", "http://"):
+        if spec.startswith(prefix):
+            spec = spec[len(prefix):]
+            break
     if "/" in spec:
         host, path = spec.split("/", 1)
         return host, path.strip("/")
@@ -338,10 +342,16 @@ class DevDocsEngine(BaseEngine):
                 )
             resolved_platform = platform.lower()
         if site:
-            host = site.strip().lstrip("https://").lstrip("http://")
-            host = host.split("/", 1)[0]
-            if host not in hosts:
-                hosts.append(host)
+            # _split_host_path normalises the prefix and (host, path)
+            # split. We want the raw spec (incl. path) preserved here
+            # so it flows into hosts as one entry.
+            normalised = site.strip()
+            for prefix in ("https://", "http://"):
+                if normalised.startswith(prefix):
+                    normalised = normalised[len(prefix):]
+                    break
+            if normalised not in hosts:
+                hosts.append(normalised)
         if not hosts:
             raise ValueError(
                 "dev_docs requires either platform=<preset> or site=<host>. "
