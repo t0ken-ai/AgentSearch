@@ -171,6 +171,9 @@ Unsplash · Pixabay · Pexels · Pinterest
 **📣 广告情报 (5) + 应用商店搜索** 🆕
 Meta Ad Library · Instagram Ad Library · Google Ads Transparency · TikTok Creative Center · TikTok Ad Library · Apple App Store · Google Play
 
+**📚 开发者文档 (83 个平台)** 🆕
+Meta / Facebook · Stripe · OpenAI · Anthropic · AWS · Google Cloud · Azure · GitHub · Kubernetes · Docker · React · Vue · Next.js · Python · Node · Rust · Go · MDN · Apple · Android · Flutter · MongoDB · Redis · Postgres · HuggingFace · Datadog · Sentry · Notion · Slack · Discord · Twilio · Shopify · Vercel · Supabase · …
+
 </td>
 </tr>
 </table>
@@ -768,6 +771,91 @@ done
 > Google ATC 在住宅代理下:cloakbrowser+stealth 路径如果撞上
 > Google 的 bot 挑战,引擎会自动 fallback 到 raw HTTP transport
 > (`GoogleAdTransparencyEngine.raw()`)保证全覆盖。
+
+</details>
+
+<details>
+<summary><b>📚 开发者文档搜索 — 83 个平台 (Stripe / OpenAI / Anthropic / AWS / Meta / …)</b></summary>
+
+直接搜开发者文档站点很痛苦 —— developers.facebook.com、
+platform.openai.com、docs.anthropic.com 等都是重型 React SPA,
+内置 search 返回的是空壳(SSR HTML 0 results),且 cloakbrowser+
+stealth+住宅代理在多数文档站会撞 navigation 反爬。
+
+务实方案:用 DuckDuckGo 站内搜(`site:<host>` 前缀),然后用
+`extract_page()` 把每个命中页抓成干净 Markdown。
+
+#### `facebook_docs` —— Meta 开发者文档
+
+```bash
+# 通用搜索
+agentsearch search "ad creation" -e fb_docs --json
+
+# 限定子产品(16 个:marketing-api / graph-api / whatsapp-business /
+# instagram-graph / messenger / threads / audience-network /
+# app-events / ad-library / login / webhooks / business-sdk / ...)
+agentsearch search "create campaign" -e fb_docs --product marketing-api
+
+# 只看 Reference 文档(避免 tutorials 干扰)
+agentsearch search "adcreative" -e fb_docs --mode reference --product marketing-api
+
+# 锁特定 API 版本
+agentsearch search "ad insights" -e fb_docs --api-version v25.0
+
+# 一次拿搜索 + 文档 markdown 全文
+agentsearch search "ad creation" -e fb_docs --depth 3 --json
+# → 5 命中,前 3 个含 body_markdown(curl 示例 + 参数表 + ISO 更新日期)
+
+# 别名: fb_docs / meta_docs / fb_dev / facebook_docs
+```
+
+每条 result 自动 tag:`doc_section` (reference / changelog /
+quickstart / tutorial / use_case / webhook / guide) /
+`product` (从 URL 推断) / `api_version` (`v21.0` / `v25.0`)。
+
+#### `dev_docs` —— 通用开发者文档搜索(83 平台)
+
+```bash
+# 按预设 platform
+agentsearch search "subscription webhook" -e docs --platform stripe
+agentsearch search "embeddings" -e docs --platform openai
+agentsearch search "tool use streaming" -e docs --platform anthropic
+agentsearch search "s3 presigned url" -e docs --platform aws --product s3
+agentsearch search "useEffect cleanup" -e docs --platform react
+
+# 任意 host(预设没覆盖的)
+agentsearch search "rate limit" -e docs --site api.notion.com
+
+# 多 host preset 自动 OR-combine
+agentsearch search "messages" -e docs --platform anthropic
+# → site:docs.anthropic.com OR site:docs.claude.com
+
+# 模式: search / reference / changelog / api / tutorial / examples
+agentsearch search "lambda" -e docs --platform aws --mode changelog
+
+# 一次拿搜索 + Markdown
+agentsearch search "embeddings" -e docs --platform openai --depth 3 --json
+```
+
+#### 预设平台清单 (83)
+
+| 类目 | 别名 |
+|---|---|
+| **云 / 基础设施** | google-cloud / gcp · aws · azure / microsoft · docker · kubernetes / k8s · hashicorp / terraform · github · gitlab · cloudflare · vercel · netlify · fly · render |
+| **API / SaaS** | stripe · twilio · slack · discord · shopify · supabase · firebase · mongodb · redis · postgres / postgresql · mysql · elasticsearch |
+| **AI / ML** | openai · anthropic / claude · huggingface / hf · cohere · pinecone · google-ai / gemini · langchain · llamaindex |
+| **前端 / 语言** | mdn / mozilla · react · vue · angular · svelte · nextjs / next · remix · nuxt · nodejs / node · deno · bun · python · typescript · rust · go / golang |
+| **移动端** | android · apple / ios · swift · flutter · react-native · expo |
+| **浏览器** | chrome · webkit |
+| **DevOps / 可观测性** | datadog · grafana · prometheus · sentry · opentelemetry |
+| **身份认证** | auth0 · okta · clerk |
+| **协作平台** | notion · airtable · linear |
+| **ML 训练基建** | wandb · mlflow · ray |
+
+> **已知限制** —— DDG 偶尔会对 `site:` 查询从住宅代理限速。引擎
+> 通过 `last_status` 暴露调试信息;真发生时,把 `dev_docs.py` 里
+> DDG 换成 Brave/Searx 是 1 行改动。每个 preset 只是一个 `host`
+> 列表 —— 加新厂商只要 1 行 PR。
 
 </details>
 

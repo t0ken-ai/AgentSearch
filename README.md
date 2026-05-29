@@ -181,6 +181,9 @@ Unsplash · Pixabay · Pexels · Pinterest
 **📣 Ad Intelligence (5) + App Store search** 🆕
 Meta Ad Library · Instagram Ad Library · Google Ads Transparency · TikTok Creative Center · TikTok Ad Library · Apple App Store · Google Play
 
+**📚 Developer Docs (83 platforms)** 🆕
+Meta / Facebook · Stripe · OpenAI · Anthropic · AWS · Google Cloud · Azure · GitHub · Kubernetes · Docker · React · Vue · Next.js · Python · Node · Rust · Go · MDN · Apple · Android · Flutter · MongoDB · Redis · Postgres · HuggingFace · Datadog · Sentry · Notion · Slack · Discord · Twilio · Shopify · Vercel · Supabase · …
+
 </td>
 </tr>
 </table>
@@ -792,6 +795,96 @@ done
 > path hits Google's bot challenge, the engine automatically falls
 > back to a raw HTTP transport (`GoogleAdTransparencyEngine.raw()`)
 > for full coverage.
+
+</details>
+
+<details>
+<summary><b>📚 Developer Documentation Search — 83 platforms (Stripe / OpenAI / Anthropic / AWS / Meta / …)</b></summary>
+
+Searching developer-doc portals directly is painful — they're heavy
+React SPAs (developers.facebook.com, platform.openai.com,
+docs.anthropic.com), their built-in search returns shells with
+zero hydrated results, and CloakBrowser+stealth+residential-proxy
+gets blocked at navigation commit on most of them.
+
+Pragmatic shortcut: drive an external web-search engine
+(DuckDuckGo by default) with `site:<host>` prepended, then route
+each match through `extract_page()` for clean Markdown.
+
+#### `facebook_docs` — Meta Developer Documentation
+
+```bash
+# Generic search
+agentsearch search "ad creation" -e fb_docs --json
+
+# Limit to a sub-product (16 known: marketing-api, graph-api,
+# whatsapp-business, instagram-graph, messenger, threads,
+# audience-network, app-events, ad-library, login, webhooks,
+# business-sdk, permissions, …)
+agentsearch search "create campaign" -e fb_docs --product marketing-api
+
+# Reference docs only (skip tutorials)
+agentsearch search "adcreative" -e fb_docs --mode reference --product marketing-api
+
+# Pin to an API version
+agentsearch search "ad insights" -e fb_docs --api-version v25.0
+
+# Search + auto-extract top N as Markdown in one call
+agentsearch search "ad creation" -e fb_docs --depth 3 --json
+# → 5 hits, top 3 each have body_markdown with curl examples,
+#   parameter tables, ISO update dates.
+
+# Aliases: fb_docs / meta_docs / fb_dev / facebook_docs
+```
+
+Output is auto-tagged with `doc_section` (reference / changelog /
+quickstart / tutorial / use_case / webhook / guide), `product`
+(inferred from URL path), and `api_version` (`v21.0` / `v25.0`).
+
+#### `dev_docs` — generic developer-docs search across 83 platforms
+
+```bash
+# By preset platform
+agentsearch search "subscription webhook" -e docs --platform stripe
+agentsearch search "embeddings" -e docs --platform openai
+agentsearch search "tool use streaming" -e docs --platform anthropic
+agentsearch search "s3 presigned url" -e docs --platform aws --product s3
+agentsearch search "useEffect cleanup" -e docs --platform react
+
+# By arbitrary host (when the preset list doesn't cover it)
+agentsearch search "rate limit" -e docs --site api.notion.com
+
+# Multi-host presets auto-OR-combine
+agentsearch search "messages" -e docs --platform anthropic
+# → site:docs.anthropic.com OR site:docs.claude.com
+
+# Modes: search / reference / changelog / api / tutorial / examples
+agentsearch search "lambda" -e docs --platform aws --mode changelog
+
+# Search + extract Markdown in one shot
+agentsearch search "embeddings" -e docs --platform openai --depth 3 --json
+```
+
+#### Preset platforms (83)
+
+| Domain | Aliases |
+|---|---|
+| **Cloud / Infra** | google-cloud / gcp · aws · azure / microsoft · docker · kubernetes / k8s · hashicorp / terraform · github · gitlab · cloudflare · vercel · netlify · fly · render |
+| **APIs / SaaS** | stripe · twilio · slack · discord · shopify · supabase · firebase · mongodb · redis · postgres / postgresql · mysql · elasticsearch |
+| **AI / ML** | openai · anthropic / claude · huggingface / hf · cohere · pinecone · google-ai / gemini · langchain · llamaindex |
+| **Frontend / Languages** | mdn / mozilla · react · vue · angular · svelte · nextjs / next · remix · nuxt · nodejs / node · deno · bun · python · typescript · rust · go / golang |
+| **Mobile** | android · apple / ios · swift · flutter · react-native · expo |
+| **Browsers** | chrome · webkit |
+| **DevOps / Observability** | datadog · grafana · prometheus · sentry · opentelemetry |
+| **Identity** | auth0 · okta · clerk |
+| **Workspace** | notion · airtable · linear |
+| **ML training infra** | wandb · mlflow · ray |
+
+> **Limitation** — DDG occasionally throttles `site:` queries from
+> residential proxies. The engine surfaces `last_status` for
+> debugging; in practice swapping the underlying search engine
+> (Brave / Searx) is a one-line change in `dev_docs.py`. Each preset
+> is just a `host` list — adding a new vendor is a 1-line PR.
 
 </details>
 
