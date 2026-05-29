@@ -181,7 +181,7 @@ Unsplash · Pixabay · Pexels · Pinterest
 **📣 Ad Intelligence (5) + App Store search** 🆕
 Meta Ad Library · Instagram Ad Library · Google Ads Transparency · TikTok Creative Center · TikTok Ad Library · Apple App Store · Google Play
 
-**📚 Developer Docs (96 platforms)** 🆕
+**📚 Developer Docs (115 platforms)** 🆕
 Meta / Facebook · Stripe · OpenAI · Anthropic · AWS · Google Cloud · Azure · GitHub · Kubernetes · Docker · React · Vue · Next.js · Python · Node · Rust · Go · MDN · Apple · Android · Flutter · MongoDB · Redis · Postgres · HuggingFace · Datadog · Sentry · Notion · Slack · Discord · Twilio · Shopify · Vercel · Supabase · …
 
 </td>
@@ -799,7 +799,7 @@ done
 </details>
 
 <details>
-<summary><b>📚 Developer Documentation Search — 96 platforms (Stripe / OpenAI / Anthropic / AWS / TikTok / Meta / …)</b></summary>
+<summary><b>📚 Developer Documentation Search — 115 platforms (Stripe / OpenAI / Anthropic / AWS / TikTok / WhatsApp / Telegram / Meta / …)</b></summary>
 
 Searching developer-doc portals directly is painful — they're heavy
 React SPAs (developers.facebook.com, platform.openai.com,
@@ -841,7 +841,7 @@ Output is auto-tagged with `doc_section` (reference / changelog /
 quickstart / tutorial / use_case / webhook / guide), `product`
 (inferred from URL path), and `api_version` (`v21.0` / `v25.0`).
 
-#### `dev_docs` — generic developer-docs search across 96 platforms
+#### `dev_docs` — generic developer-docs search across 115 platforms
 
 ```bash
 # By preset platform
@@ -865,13 +865,16 @@ agentsearch search "lambda" -e docs --platform aws --mode changelog
 agentsearch search "embeddings" -e docs --platform openai --depth 3 --json
 ```
 
-#### Preset platforms (96)
+#### Preset platforms (115)
 
 | Domain | Aliases |
 |---|---|
 | **Cloud / Infra** | google-cloud / gcp · aws · azure / microsoft · docker · kubernetes / k8s · hashicorp / terraform · github · gitlab · cloudflare · vercel · netlify · fly · render |
 | **APIs / SaaS** | stripe · twilio · slack · discord · shopify · supabase · firebase · mongodb · redis · postgres / postgresql · mysql · elasticsearch |
-| **Social platforms** 🆕 | tiktok / tiktok-business / tiktok-marketing / tiktok-login · snap / snapchat · twitter / x · pinterest · reddit · linkedin · youtube · google-ads |
+| **Social platforms** | tiktok / tiktok-business / tiktok-marketing / tiktok-login · snap / snapchat / snap-marketing · twitter / x · pinterest · reddit · linkedin · youtube |
+| **Messaging / Chat** 🆕 | whatsapp / whatsapp-business / whatsapp-cloud · telegram / telegram-bot · messenger · line · viber · wechat / wechat-pay · kakao · instagram · threads |
+| **Meta megasite** 🆕 | meta · facebook · instagram · messenger · threads · whatsapp · *(also: fb_docs engine for the 16-product narrow)* |
+| **Google products** 🆕 | google-cloud / gcp · firebase · google-ads · google-analytics · google-maps · google-pay · youtube · google-ai / gemini |
 | **AI / ML** | openai · anthropic / claude · huggingface / hf · cohere · pinecone · google-ai / gemini · langchain · llamaindex |
 | **Frontend / Languages** | mdn / mozilla · react · vue · angular · svelte · nextjs / next · remix · nuxt · nodejs / node · deno · bun · python · typescript · rust · go / golang |
 | **Mobile** | android · apple / ios · swift · flutter · react-native · expo |
