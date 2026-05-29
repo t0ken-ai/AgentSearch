@@ -38,6 +38,9 @@ _ALIASES: dict[str, tuple[str, str]] = {
     "fb_docs":     ("facebook_docs",      "FacebookDocsEngine"),
     "meta_docs":   ("facebook_docs",      "FacebookDocsEngine"),
     "fb_dev":      ("facebook_docs",      "FacebookDocsEngine"),
+    # Generic developer-docs search (40+ preset platforms or arbitrary site=)
+    "dev_docs":    ("dev_docs",           "DevDocsEngine"),
+    "docs":        ("dev_docs",           "DevDocsEngine"),
 }
 
 
