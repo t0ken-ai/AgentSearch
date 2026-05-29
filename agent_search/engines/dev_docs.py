@@ -347,7 +347,13 @@ class DevDocsEngine(BaseEngine):
             return "changelog"
         if "/get-started" in u or "/quickstart" in u or "/getting-started" in u:
             return "quickstart"
-        if "/tutorials/" in u or "/tutorial/" in u or "/guides/" in u:
+        # /tutorials/ /tutorial/ /tutorial-foo (URL-slug variant) /learn/
+        # (React/Svelte/Astro all use /learn/ for tutorials).
+        if (
+            "/tutorials/" in u or "/tutorial/" in u
+            or "/tutorial-" in u or "/learn/" in u
+            or "/guides/" in u
+        ):
             return "tutorial"
         if "/examples/" in u or "/example/" in u or "/cookbook/" in u:
             return "example"
