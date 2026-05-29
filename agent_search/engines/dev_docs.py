@@ -292,6 +292,49 @@ class DevDocsEngine(BaseEngine):
         super().__init__(page)
         self.last_status: dict = {}
         self._ddg = DuckDuckGoEngine(page)
+        # Lazy fallback engines — only instantiated when DDG drops to
+        # zero results (which happens when the residential / datacenter
+        # IP gets throttled).
+        self._brave = None
+        self._bing = None
+        self._page = page
+
+    def _get_brave(self):
+        if self._brave is None:
+            from .brave import BraveEngine
+            self._brave = BraveEngine(self._page)
+        return self._brave
+
+    def _get_bing(self):
+        if self._bing is None:
+            from .bing import BingEngine
+            self._bing = BingEngine(self._page)
+        return self._bing
+
+    def _search_with_fallback(self, ddg_query: str, limit: int) -> tuple[list, str]:
+        """Run a DDG search; on zero results fall back to Brave then Bing.
+
+        Returns ``(results, backend_used)``.
+        """
+        rs = self._ddg.search(ddg_query, limit=limit) or []
+        if rs:
+            return rs, "ddg"
+        # DDG threw 0 — try Brave (different infra, usually unaffected by
+        # DDG residential-proxy throttling).
+        try:
+            rs = self._get_brave().search(ddg_query, limit=limit) or []
+            if rs:
+                return rs, "brave"
+        except Exception as e:  # pragma: no cover
+            log.debug("brave fallback failed: %s", e)
+        # Last resort — Bing.
+        try:
+            rs = self._get_bing().search(ddg_query, limit=limit) or []
+            if rs:
+                return rs, "bing"
+        except Exception as e:  # pragma: no cover
+            log.debug("bing fallback failed: %s", e)
+        return [], "all-failed"
 
     def search(  # type: ignore[override]
         self,
@@ -371,16 +414,21 @@ class DevDocsEngine(BaseEngine):
         # to one query per host and merge instead. Keeps the single-
         # host fast path as is.
         if len(hosts) == 1:
-            results = self._ddg.search(
-                ddg_query_full, limit=max(limit * 2, 20)) or []
+            results, backend = self._search_with_fallback(
+                ddg_query_full, limit=max(limit * 2, 20))
         else:
             results = []
+            backend = "ddg"
             seen_urls: set[str] = set()
             for host in hosts:
                 sub_q = self._build_ddg_query(
                     query, [host], m, product, api_version,
                 )
-                for r in (self._ddg.search(sub_q, limit=limit * 2) or []):
+                sub_rs, sub_backend = self._search_with_fallback(
+                    sub_q, limit=limit * 2)
+                if sub_backend != "ddg":
+                    backend = sub_backend
+                for r in sub_rs:
                     if r.url and r.url not in seen_urls:
                         seen_urls.add(r.url)
                         results.append(r)
@@ -421,6 +469,7 @@ class DevDocsEngine(BaseEngine):
             "product": product,
             "api_version": api_version,
             "ddg_query": ddg_query_full,
+            "backend": backend,
             "raw_results": len(results),
             "kept": len(kept),
         }
