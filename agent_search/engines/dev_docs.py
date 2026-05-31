@@ -156,6 +156,47 @@ _PRESETS: dict[str, list[str]] = {
     "wechat-pay":          ["pay.weixin.qq.com"],
     "kakao":               ["developers.kakao.com"],
 
+    # ── Mobile analytics / attribution / ad-intelligence ──
+    # The four pillars of paid-acquisition tooling: market
+    # intelligence (data.ai, Sensor Tower, 七麦 / 点点数据), MMP /
+    # attribution (AppsFlyer, Adjust, Branch), ad-network /
+    # mediation (AppLovin), and ad-creative spy (BigSpy).
+    #
+    # Many vendors split docs across "developer hub" and "help
+    # center" subdomains — both are included so a single search
+    # spans tutorials + API reference.
+    "data.ai":             ["helpcenter.data.ai"],
+    "data-ai":             ["helpcenter.data.ai"],
+    "appannie":            ["helpcenter.data.ai"],
+    "sensortower":         ["sensortower.com",
+                            "app.sensortower.com"],
+    "appsflyer":           ["dev.appsflyer.com",
+                            "support.appsflyer.com"],
+    "appsflyer-performance-index": [
+                            "www.appsflyer.com/performance-index"],
+    "appsflyer-pi":        ["www.appsflyer.com/performance-index"],
+    "adjust":              ["dev.adjust.com", "help.adjust.com"],
+    "branch":              ["help.branch.io"],
+    "branch.io":           ["help.branch.io"],
+    "applovin":            ["developers.applovin.com",
+                            "dash.applovin.com/documentation"],
+    "applovin-max":        ["developers.applovin.com/max",
+                            "dash.applovin.com/documentation/mediation"],
+    "bigspy":              ["bigspy.com",
+                            "dev.bigspy.com",
+                            "bigspy.crisp.help"],
+    # Chinese ASO / app-store intelligence portals. 七麦 = qimai.cn,
+    # 点点数据 also ASO-focused — these aliases all map to the
+    # broadest host so a Chinese-language query lands on the right
+    # platform regardless of which brand the user typed.
+    "qimai":               ["www.qimai.cn"],
+    "qimai.cn":            ["www.qimai.cn"],
+    "七麦":                ["www.qimai.cn"],
+    "qimai-international": ["www.qimai.com"],
+    "diandian":            ["www.qimai.cn"],   # 点点数据 — same family
+    "点点数据":            ["www.qimai.cn"],
+    "dianshu":             ["www.qimai.cn"],
+
     # ── AI / ML ──
     "openai":          ["platform.openai.com"],
     "anthropic":       ["docs.anthropic.com", "docs.claude.com"],
