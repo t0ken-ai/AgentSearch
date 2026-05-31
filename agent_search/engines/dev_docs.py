@@ -192,6 +192,29 @@ _PRESETS: dict[str, list[str]] = {
     "appsflyer-benchmarks":["www.appsflyer.com/benchmarks"],
     "appsflyer-bench":     ["www.appsflyer.com/benchmarks"],
 
+    # Industry research / market-intelligence portals (often cited in
+    # quantitative industry write-ups):
+    "statista":            ["www.statista.com"],
+    "emarketer":           ["www.emarketer.com",
+                            "www.insiderintelligence.com"],
+    "insiderintelligence": ["www.insiderintelligence.com",
+                            "www.emarketer.com"],
+
+    # Ad-creative spy (西方 + 国内出海) :
+    "socialpeta":          ["socialpeta.com"],
+    "广大大":              ["socialpeta.com"],
+    "guangdada":           ["socialpeta.com"],
+
+    # Performance-marketing / ad-tech editorial sources frequently
+    # used as secondary references for MMP and benchmark reports:
+    "ppc.land":            ["ppc.land"],
+    "ppcland":             ["ppc.land"],
+
+    # Newsletter platform — many performance-marketing experts publish
+    # on Substack rather than a personal blog. Site search covers all
+    # *.substack.com subdomains.
+    "substack":            ["substack.com"],
+
     # Web traffic intelligence (used to size up competitor websites):
     "similarweb":          ["docs.similarweb.com",
                             "developers.similarweb.com"],
@@ -366,6 +389,9 @@ _CATEGORIES: dict[str, list[str]] = {
         "similarweb", "admiral", "getadmiral", "businessofapps", "boa",
         "qimai", "qimai.cn", "七麦", "qimai-international",
         "diandian", "点点数据", "dianshu",
+        "statista", "emarketer", "insiderintelligence",
+        "socialpeta", "广大大", "guangdada",
+        "ppc.land", "ppcland", "substack",
     ],
     "ai_ml": [
         "openai", "anthropic", "claude", "huggingface", "hf",
