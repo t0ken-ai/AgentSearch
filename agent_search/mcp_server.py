@@ -1,23 +1,36 @@
 """MCP (Model Context Protocol) server wrapper for AgentSearch.
 
-Exposes three tools to any MCP-compatible client (Claude Desktop, Cursor,
-Cline, Continue, OpenClaw, Roo Code, Zed, ...):
+Exposes 7 tools to any MCP-compatible client (Claude Desktop, Cursor,
+Cline, Continue, Kiro, Roo Code, Zed, ...):
 
-  * ``search``        — query one of 71+ search engines, return SERP hits
-  * ``extract``       — fetch a URL and return readability-extracted markdown
-  * ``list_engines``  — enumerate available search engines
+  * ``search``               — query one of 80+ search engines, with
+                                 optional ``engine_options`` for
+                                 engine-specific parameters
+                                 (dev_docs platform=, ad-library
+                                 country=, mode=, …)
+  * ``extract``              — fetch a URL and return readability-
+                                 extracted markdown
+  * ``list_engines``         — enumerate engines + categories +
+                                 ``engine_options`` examples
+  * ``search_app``           — keyword-search Apple App Store /
+                                 Google Play with 25+ metadata fields
+  * ``lookup_app``           — single-app metadata from URL or id
+  * ``find_competitor_ads``  — App URL → ads on Meta / Instagram /
+                                 Google / TikTok in one call
+  * ``download_ad_media``    — bulk-download every image / video URL
+                                 from a list of ad-engine results
 
-The server keeps a single CloakBrowser instance alive for the lifetime of
-the process so each tool call doesn't pay the ~0.5-2s Chromium startup
-cost. The browser is recycled lazily after a configurable number of
-calls (the page state otherwise drifts — cookies pile up, JS world gets
-polluted, etc.).
+The server keeps a single CloakBrowser instance alive for the lifetime
+of the process so each tool call doesn't pay the ~0.5-2s Chromium
+startup cost. The browser is recycled lazily after a configurable
+number of calls (the page state otherwise drifts — cookies pile up,
+JS world gets polluted, etc.).
 
 Run with::
 
     python -m agent_search.mcp_server
 
-Configure in Claude Desktop's ``claude_desktop_config.json``::
+Configure in Kiro / Claude Desktop's MCP config::
 
     {
       "mcpServers": {
@@ -137,15 +150,20 @@ async def search(
     engine: str = "duckduckgo",
     limit: int = 10,
     depth: int = 0,
+    engine_options: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """Search the live web through one of 71+ stealth-browser engines.
+    """Search the live web through one of 80+ stealth-browser engines.
 
     Use this whenever you need fresh content that isn't in your training
     data — Google / Bing / DuckDuckGo for general queries, ``reddit``
     for opinions, ``stackoverflow`` for code errors, ``arxiv`` for
     research, ``github`` for repositories, ``youtube`` for video,
-    ``bilibili`` / ``zhihu`` / ``xiaohongshu`` for Chinese content, and
-    so on. Call ``list_engines`` to see every available engine.
+    ``bilibili`` / ``zhihu`` / ``xiaohongshu`` for Chinese content,
+    ``dev_docs`` for any developer documentation portal (115 presets),
+    ``fb_docs`` for Meta developer docs, ``meta_ad_library`` /
+    ``google_ad_transparency`` / ``tiktok_creative_center`` for ad
+    competitor research, and so on. Call ``list_engines`` to see every
+    available engine.
 
     Args:
         query: Search query string. Supports the engine's native syntax.
@@ -156,17 +174,58 @@ async def search(
             result URLs inline. Each result gets ``body_markdown`` /
             ``body_text`` / ``body_word_count`` fields attached. Saves
             the agent N follow-up ``extract`` calls. Default 0 (SERP only).
+        engine_options: Engine-specific keyword arguments forwarded to
+            ``EngineClass.search()``. Required for engines whose query
+            isn't just free text. Common examples:
+
+              * ``dev_docs``  / ``docs``:
+                ``{"platform": "stripe"}``  — preset (one of 115:
+                  stripe, openai, anthropic, aws, react, whatsapp,
+                  telegram, tiktok, ...)
+                ``{"site": "docs.example.com"}`` — arbitrary host
+                ``{"mode": "reference"}`` (or changelog/api/tutorial/examples)
+                ``{"product": "lambda"}`` — narrow with inurl:lambda
+                ``{"api_version": "v25.0"}`` — quote a version literal
+              * ``fb_docs`` / ``facebook_docs``:
+                ``{"product": "marketing-api"}`` (16 product slugs)
+                ``{"mode": "reference"}``  ``{"api_version": "v25.0"}``
+              * ``meta_ad_library`` / ``fb_ads`` / ``instagram_ad_library``:
+                ``{"country": "US", "active_status": "active",
+                   "ad_type": "all", "media_type": "all"}``
+                ``{"mode": "advertiser", "page_id": "20409006880"}`` —
+                  query a known Facebook page id directly
+                ``{"mode": "page_url", "page_url": "https://facebook.com/Shopify"}``
+              * ``google_ad_transparency`` / ``g_ads``:
+                ``{"mode": "search_advertisers", "region": "US"}``
+                ``{"mode": "domain", "domain": "shopify.com"}``
+                ``{"mode": "advertiser_ads", "advertiser_id": "AR..."}``
+              * ``tiktok_creative_center`` / ``tt_ads``:
+                ``{"mode": "top_ads", "country": "US",
+                   "industry": "ecommerce", "period": 30}``
+              * ``reddit`` / ``reddit_subreddit``:
+                ``{"sort": "top", "time": "month"}``
+              * ``youtube``:
+                ``{"upload_date": "this_week", "duration": "long",
+                   "sort_by": "view_count"}``
+              * ``github_search``:
+                ``{"type": "code", "language": "python",
+                   "stars": ">100"}``
+              * ``arxiv``:
+                ``{"category": "cs.AI", "sort_by": "submittedDate"}``
+
+            For engines that don't accept extras, leave it empty.
 
     Returns:
         A dict with ``engine``, ``query``, ``count``, and ``results`` —
         each result has at least ``title``, ``url``, ``snippet``, plus
         engine-specific extras (e.g. ``score``, ``video_id``,
-        ``arxiv_id``, ``imdb_rating``, ``price``). When ``depth > 0``,
-        the first N results also have ``body_markdown`` /
-        ``body_word_count``.
+        ``arxiv_id``, ``imdb_rating``, ``price``, ``doc_section``,
+        ``platform``, ``ad_archive_id``). When ``depth > 0``, the
+        first N results also have ``body_markdown`` / ``body_word_count``.
     """
     limit = max(1, min(limit, 50))
     depth = max(0, min(depth, limit))
+    extra_kwargs = dict(engine_options or {})
     try:
         engine_cls = _get_engine(engine)
     except ValueError as e:
@@ -182,7 +241,19 @@ async def search(
         page = _pool.page()
         try:
             instance = engine_cls(page)
-            results = instance.search(query, limit=limit) or []
+            try:
+                results = instance.search(
+                    query, limit=limit, **extra_kwargs) or []
+            except TypeError as te:
+                # Fall back to a vanilla call when the engine doesn't
+                # accept the supplied kwargs, but surface the exact
+                # mismatch so the caller can fix their options dict.
+                if extra_kwargs:
+                    raise TypeError(
+                        f"engine {engine!r} rejected engine_options "
+                        f"{list(extra_kwargs)}: {te}"
+                    ) from te
+                raise
         finally:
             try:
                 page.close()
@@ -303,6 +374,329 @@ async def extract(
 
 
 @mcp.tool()
+async def search_app(
+    query: str,
+    store: str = "all",
+    country: str = "us",
+    limit: int = 25,
+    fast: bool = False,
+    with_contact: bool = False,
+    proxy_url: str | None = None,
+) -> dict[str, Any]:
+    """Keyword-search the Apple App Store and/or Google Play.
+
+    Returns rich app metadata (title, developer, ratings, website,
+    support email, privacy URL, screenshots, …) so downstream agents
+    can chain into ``find_competitor_ads`` (App Store URL → ads on
+    every platform) or build outreach lists.
+
+    Args:
+        query: Free-text query — same syntax both stores accept.
+        store: ``apple`` / ``ios`` for App Store, ``google`` / ``play``
+            / ``android`` for Google Play, ``all`` (default) hits both.
+        country: ISO country code (``us``, ``cn``, ``jp``, …). Some
+            apps are region-locked.
+        limit: Max apps per store (default 25).
+        fast: When True, skip the per-app Google Play HTML detail
+            fetch — only package ids and titles are returned for
+            Google rows. Halves wall-time when scanning many apps.
+        with_contact: Filter to apps that exposed at least one of
+            ``support_email`` / ``privacy_url`` / ``website``. Useful
+            for lead-gen / compliance pipelines.
+        proxy_url: Optional ``http(s)://[user:pass@]host:port`` —
+            falls back to ``FLUXISP_PROXY`` env var when unset.
+
+    Returns:
+        ``{"query", "store", "country", "count", "elapsed_s", "results": [...]}``
+        Each result has 25+ fields including ``app_id``, ``bundle_id``,
+        ``store``, ``title``, ``developer_name``, ``developer_id``,
+        ``website``, ``support_email``, ``privacy_url``, ``rating``,
+        ``rating_count``, ``price``, ``currency``, ``description``,
+        ``icon_url``, ``screenshots``, ``url``, …
+    """
+    from .engines._app_store import (
+        search_apple, search_google, search_app as _search_app_fn,
+    )
+
+    proxy = proxy_url or os.environ.get("FLUXISP_PROXY")
+    proxies = ({"https": proxy, "http": proxy}) if proxy else None
+    limit = max(1, min(limit, 200))
+    s = (store or "all").lower()
+
+    def _run() -> list[Any]:
+        if s in ("apple", "ios"):
+            return search_apple(query, country=country, limit=limit,
+                                proxies=proxies) or []
+        if s in ("google", "android", "play"):
+            return search_google(query, country=country, limit=limit,
+                                 proxies=proxies,
+                                 fetch_details=not fast) or []
+        return _search_app_fn(query, store="all", country=country,
+                              limit=limit, proxies=proxies,
+                              fetch_details=not fast) or []
+
+    import time as _time
+    started = _time.time()
+    try:
+        raw = await asyncio.to_thread(_run)
+    except Exception as e:
+        log.exception("[mcp] search_app failed: %s", e)
+        return {
+            "query": query, "store": s, "country": country,
+            "error": f"{type(e).__name__}: {e}",
+            "count": 0, "results": [],
+        }
+    elapsed = _time.time() - started
+
+    if with_contact:
+        raw = [m for m in raw
+               if m.support_email or m.privacy_url or m.website]
+
+    return {
+        "query": query,
+        "store": s,
+        "country": country,
+        "count": len(raw),
+        "elapsed_s": round(elapsed, 1),
+        "results": [m.to_dict() for m in raw],
+    }
+
+
+@mcp.tool()
+async def lookup_app(
+    app_url: str,
+    country: str = "us",
+    proxy_url: str | None = None,
+) -> dict[str, Any]:
+    """Look up a single app's metadata from a store URL or app id.
+
+    Accepts:
+
+      * Apple URL — ``https://apps.apple.com/.../id1234567890``
+      * Google Play URL — ``https://play.google.com/store/apps/details?id=com.foo.bar``
+      * Bare numeric id (Apple) — ``1234567890``
+      * Bare package id (Google Play) — ``com.foo.bar``
+
+    Use this as the cheaper, single-app entry point compared to
+    ``search_app`` (no keyword scan, just one lookup).
+
+    Args:
+        app_url: Store URL or bare id (see above).
+        country: ISO country code (default ``us``).
+        proxy_url: Optional outbound proxy.
+
+    Returns:
+        AppMetadata dict with the same 25+ fields as ``search_app``
+        rows, plus a top-level ``error`` when resolution fails.
+    """
+    from .engines._app_store import lookup_app as _lookup
+
+    proxy = proxy_url or os.environ.get("FLUXISP_PROXY")
+    proxies = ({"https": proxy, "http": proxy}) if proxy else None
+
+    def _run() -> Any:
+        return _lookup(app_url, proxies=proxies, country=country.lower())
+
+    try:
+        meta = await asyncio.to_thread(_run)
+    except Exception as e:
+        log.exception("[mcp] lookup_app failed: %s", e)
+        return {"app_url": app_url, "error": f"{type(e).__name__}: {e}"}
+
+    if not meta:
+        return {
+            "app_url": app_url,
+            "error": (
+                "could not resolve. Pass an Apple App Store URL "
+                "(https://apps.apple.com/.../id<NUM>), a Google Play "
+                "URL (https://play.google.com/store/apps/details?id=<PKG>), "
+                "or a bare numeric / package id."
+            ),
+        }
+    return meta.to_dict()
+
+
+@mcp.tool()
+async def find_competitor_ads(
+    app_url: str,
+    platforms: list[str] | None = None,
+    limit_per_platform: int = 10,
+    country: str = "US",
+    precise: bool = False,
+    proxy_url: str | None = None,
+) -> dict[str, Any]:
+    """End-to-end competitor ad research from an App Store URL.
+
+    Pipeline::
+
+        App URL  →  app metadata (developer, website domain)
+                 →  fan-out to ad libraries:
+                      * Meta / Instagram   (query=developer name)
+                      * Google ATC         (mode=domain, domain=…)
+                      * TikTok CC          (keyword=developer name)
+                 →  merged AdRecord stream
+
+    Use this when you have a competitor's app and want to know what
+    ads they're running across the major paid platforms in one shot.
+
+    Args:
+        app_url: App Store URL or bare id (same accepted formats as
+            ``lookup_app``).
+        platforms: Subset of ``["meta", "instagram", "google", "tiktok"]``.
+            Default = all four.
+        limit_per_platform: Max ads per platform (default 10).
+        country: ISO country code, applied to every platform that
+            takes a country filter. Default ``US``.
+        precise: When True, run Meta's ``lookup_pages`` first to
+            resolve the developer name to a canonical Facebook
+            page_id, then query Meta/Instagram by ``page_id`` instead
+            of by keyword. ~1 extra round-trip but much higher
+            advertiser-match precision.
+        proxy_url: Optional ``http(s)://[user:pass@]host:port``.
+            Falls back to ``FLUXISP_PROXY`` / ``HTTPS_PROXY`` /
+            ``HTTP_PROXY`` env vars.
+
+    Returns:
+        ``{"app", "platforms_queried", "totals": {<platform>: count},
+           "ads": [<AdRecord>, ...], "errors": {<platform>: msg}}``
+    """
+    from .engines._app_store import lookup_app as _lookup_app
+    from .engines._ad_base import to_ad_record
+
+    proxy = proxy_url or _resolve_default_proxy()
+    proxies = ({"https": proxy, "http": proxy}) if proxy else None
+    limit = max(1, min(limit_per_platform, 50))
+    plats = [p.lower() for p in (
+        platforms or ["meta", "instagram", "google", "tiktok"])]
+
+    def _run() -> dict[str, Any]:
+        meta = _lookup_app(app_url, proxies=proxies, country=country.lower())
+        if not meta:
+            return {
+                "app_url": app_url,
+                "error": "could not resolve app — pass a real store URL or id",
+                "ads": [],
+            }
+        if not meta.developer_name and not meta.domain:
+            return {
+                "app": meta.to_dict(),
+                "error": "app has no developer_name or domain — nothing to query",
+                "ads": [],
+            }
+
+        ads: list[dict[str, Any]] = []
+        totals: dict[str, int] = {}
+        errors: dict[str, str] = {}
+        platforms_queried: list[str] = []
+
+        # Helper that runs one platform query in a fresh page.
+        def _query(engine_handle: str, kwargs: dict) -> list[Any]:
+            engine_cls = _get_engine(engine_handle)
+            page = _pool.page()
+            try:
+                inst = engine_cls(page)
+                rs = inst.search(
+                    kwargs.pop("query", ""),
+                    limit=limit,
+                    **kwargs,
+                ) or []
+            finally:
+                try:
+                    page.close()
+                except Exception:
+                    pass
+            return rs
+
+        # Meta
+        if "meta" in plats and meta.developer_name:
+            platforms_queried.append("meta")
+            try:
+                if precise:
+                    rs = _query("meta_ad_library", {
+                        "query": meta.developer_name,
+                        "mode": "keyword",
+                        "country": country,
+                    })
+                else:
+                    rs = _query("meta_ad_library", {
+                        "query": meta.developer_name,
+                        "country": country,
+                    })
+                for r in rs:
+                    rec = to_ad_record(r.__dict__).to_dict()
+                    ads.append(rec)
+                totals["meta"] = len(rs)
+            except Exception as e:
+                errors["meta"] = f"{type(e).__name__}: {e}"
+
+        # Instagram
+        if "instagram" in plats and meta.developer_name:
+            platforms_queried.append("instagram")
+            try:
+                rs = _query("instagram_ad_library", {
+                    "query": meta.developer_name,
+                    "country": country,
+                })
+                for r in rs:
+                    rec = to_ad_record(r.__dict__).to_dict()
+                    ads.append(rec)
+                totals["instagram"] = len(rs)
+            except Exception as e:
+                errors["instagram"] = f"{type(e).__name__}: {e}"
+
+        # Google ATC — domain mode (more reliable than keyword)
+        if "google" in plats and meta.domain:
+            platforms_queried.append("google")
+            try:
+                rs = _query("google_ad_transparency", {
+                    "query": meta.domain,
+                    "mode": "domain",
+                    "domain": meta.domain,
+                    "region": country,
+                })
+                for r in rs:
+                    rec = to_ad_record(r.__dict__).to_dict()
+                    ads.append(rec)
+                totals["google"] = len(rs)
+            except Exception as e:
+                errors["google"] = f"{type(e).__name__}: {e}"
+
+        # TikTok Creative Center — keyword on top_ads
+        if "tiktok" in plats and meta.developer_name:
+            platforms_queried.append("tiktok")
+            try:
+                rs = _query("tiktok_creative_center", {
+                    "query": meta.developer_name,
+                    "mode": "top_ads",
+                    "country": country,
+                })
+                for r in rs:
+                    rec = to_ad_record(r.__dict__).to_dict()
+                    ads.append(rec)
+                totals["tiktok"] = len(rs)
+            except Exception as e:
+                errors["tiktok"] = f"{type(e).__name__}: {e}"
+
+        return {
+            "app": meta.to_dict(),
+            "platforms_queried": platforms_queried,
+            "totals": totals,
+            "ads": ads,
+            "errors": errors,
+        }
+
+    try:
+        return await asyncio.to_thread(_run)
+    except Exception as e:
+        log.exception("[mcp] find_competitor_ads failed: %s", e)
+        return {
+            "app_url": app_url,
+            "error": f"{type(e).__name__}: {e}",
+            "ads": [],
+        }
+
+
+@mcp.tool()
 async def list_engines() -> dict[str, Any]:
     """List every search engine available to ``search``.
 
@@ -344,11 +738,69 @@ async def list_engines() -> dict[str, Any]:
             "tiktok_ad_library", "tiktok_ads",
             "google_ad_transparency", "g_ads",
         ],
+        # Developer documentation search — DDG site-search wrappers
+        # for any developer portal. Use engine_options={"platform": ...}
+        # for the 115-preset lookup, or {"site": "docs.example.com"}
+        # for an arbitrary host.
+        "developer_docs": [
+            "dev_docs", "docs",
+            "facebook_docs", "fb_docs", "meta_docs", "fb_dev",
+        ],
     }
     return {
         "count": len(set(reg.values())),
         "engines": handles,
         "categories": categories,
+        # Hint companion tools so agents can discover them without
+        # needing to read the README first.
+        "companion_tools": [
+            "extract            — fetch a URL and return Markdown",
+            "search_app         — keyword-search Apple App Store / Google Play",
+            "lookup_app         — single-app metadata from URL or id",
+            "find_competitor_ads — App URL → ads on Meta/IG/Google/TikTok",
+            "download_ad_media  — bulk-download every image/video URL from ad results",
+        ],
+        # Common engine_options examples for the most-used engines —
+        # surfaced here so a curious agent can call list_engines once
+        # and learn the full toolkit without reading the search docstring.
+        "engine_options_examples": {
+            "dev_docs": {
+                "platform": "stripe",
+                "mode": "reference",
+                "product": "billing",
+            },
+            "fb_docs": {
+                "product": "marketing-api",
+                "mode": "reference",
+                "api_version": "v25.0",
+            },
+            "meta_ad_library": {
+                "country": "US",
+                "active_status": "active",
+                "media_type": "video",
+            },
+            "google_ad_transparency": {
+                "mode": "domain",
+                "domain": "shopify.com",
+                "region": "US",
+            },
+            "tiktok_creative_center": {
+                "mode": "top_ads",
+                "country": "US",
+                "industry": "ecommerce",
+                "period": 30,
+            },
+            "youtube": {
+                "upload_date": "this_week",
+                "duration": "long",
+                "sort_by": "view_count",
+            },
+            "github_search": {
+                "type": "code",
+                "language": "python",
+                "stars": ">100",
+            },
+        },
     }
 
 
