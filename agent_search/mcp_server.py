@@ -50,9 +50,11 @@ Configure in Kiro / Claude Desktop's MCP config::
 from __future__ import annotations
 
 import asyncio
+import concurrent.futures
 import logging
 import os
 import threading
+from functools import partial
 from typing import Any
 
 from mcp.server.fastmcp import FastMCP
@@ -71,6 +73,54 @@ RECYCLE_AFTER = int(os.environ.get("AGENTSEARCH_RECYCLE_AFTER", "25"))
 
 # Default headless mode. Override with AGENTSEARCH_HEADLESS=0 for debugging.
 HEADLESS = os.environ.get("AGENTSEARCH_HEADLESS", "1") != "0"
+
+
+# ---------------------------------------------------------------------------
+# Dedicated single-worker browser executor
+# ---------------------------------------------------------------------------
+# Playwright's sync API uses greenlets that are *thread-bound*: every
+# Browser / Context / Page object remembers the OS thread it was created
+# on, and any subsequent call from a different thread raises
+#
+#     greenlet.error: cannot switch to a different thread
+#
+# (or, less commonly, ``Error: Page.goto: Greenlet was created from a
+# different thread``).
+#
+# ``asyncio.to_thread()`` dispatches to asyncio's *default* executor,
+# which is a ``ThreadPoolExecutor(max_workers=min(32, cpu_count+4))``.
+# Under load that pool reuses idle workers but freely spawns new ones
+# when concurrent requests stack up — so the singleton browser ends up
+# being touched from whichever worker the second / third call lands on,
+# and we hit the greenlet error intermittently.
+#
+# Fix: pin *all* browser work to a single dedicated worker thread. The
+# helper :func:`_to_browser_thread` is the only path callbacks use to
+# reach Playwright; ``BrowserPool`` records the worker's thread id on
+# launch and asserts on every ``page()`` call so any future regression
+# fails loudly instead of flaking under load.
+_BROWSER_EXECUTOR = concurrent.futures.ThreadPoolExecutor(
+    max_workers=1,
+    thread_name_prefix="agent-search-browser",
+)
+
+
+async def _to_browser_thread(fn, *args, **kwargs):
+    """Run ``fn`` on the dedicated browser worker thread.
+
+    Every callback that touches the CloakBrowser / Playwright objects
+    must go through this helper. We submit through a single-worker
+    ``ThreadPoolExecutor`` (rather than ``asyncio.to_thread``, which
+    uses the multi-worker default executor) so Playwright's
+    greenlet-thread affinity is preserved across calls.
+
+    See module-level comment on ``_BROWSER_EXECUTOR`` for the full
+    reasoning.
+    """
+    loop = asyncio.get_running_loop()
+    if args or kwargs:
+        fn = partial(fn, *args, **kwargs)
+    return await loop.run_in_executor(_BROWSER_EXECUTOR, fn)
 
 
 def _resolve_default_proxy() -> str | None:
@@ -93,17 +143,21 @@ def _resolve_default_proxy() -> str | None:
 
 
 class BrowserPool:
-    """Lazy, thread-safe singleton browser with periodic recycling.
+    """Lazy, thread-pinned singleton browser with periodic recycling.
 
-    The MCP runtime serializes tool calls through stdio so concurrent
-    access is rare, but we still guard with a lock so the server can
-    safely be wrapped in an HTTP/SSE transport later.
+    The browser must only be touched from the dedicated worker thread
+    used by :data:`_BROWSER_EXECUTOR` — see the module-level comment on
+    that executor for why. We record the launching thread's id and
+    assert on every ``page()`` call to make any drift fail loudly.
     """
 
     def __init__(self) -> None:
         self._browser = None
         self._calls = 0
         self._lock = threading.Lock()
+        # Thread id of whichever worker first launched the browser.
+        # Set in _start(); checked in page().
+        self._browser_thread_id: int | None = None
 
     def _start(self) -> None:
         log.info("[mcp] launching browser (headless=%s)", HEADLESS)
@@ -113,6 +167,7 @@ class BrowserPool:
             proxy=_resolve_default_proxy(),
         ))
         self._calls = 0
+        self._browser_thread_id = threading.get_ident()
 
     def _maybe_recycle(self) -> None:
         if self._calls >= RECYCLE_AFTER and self._browser is not None:
@@ -122,13 +177,35 @@ class BrowserPool:
             except Exception:
                 pass
             self._browser = None
+            self._browser_thread_id = None
 
     def page(self):
-        """Return a fresh page bound to the live browser."""
+        """Return a fresh page bound to the live browser.
+
+        Must be called from the dedicated browser worker thread (i.e.
+        from inside a callback dispatched via ``_to_browser_thread``).
+        Calling from any other thread would trip Playwright's greenlet
+        affinity — we assert here so the failure mode is a clear
+        ``RuntimeError`` rather than an opaque greenlet stack trace.
+        """
         with self._lock:
             self._maybe_recycle()
             if self._browser is None:
                 self._start()
+            else:
+                cur = threading.get_ident()
+                if (
+                    self._browser_thread_id is not None
+                    and cur != self._browser_thread_id
+                ):
+                    raise RuntimeError(
+                        f"BrowserPool.page() called from thread {cur} but "
+                        f"the browser was created on thread "
+                        f"{self._browser_thread_id}. Playwright's sync API "
+                        f"is greenlet-bound to its creation thread; route "
+                        f"this call through _to_browser_thread() instead "
+                        f"of asyncio.to_thread()."
+                    )
             self._calls += 1
             return new_page(self._browser)
 
@@ -140,6 +217,7 @@ class BrowserPool:
                 except Exception:
                     pass
                 self._browser = None
+                self._browser_thread_id = None
 
 
 _pool = BrowserPool()
@@ -298,7 +376,7 @@ async def search(
         return results
 
     try:
-        raw = await asyncio.to_thread(_run)
+        raw = await _to_browser_thread(_run)
     except Exception as e:
         log.exception("[mcp] search failed: %s", e)
         return {
@@ -384,7 +462,7 @@ async def extract(
                 pass
 
     try:
-        return await asyncio.to_thread(_run)
+        return await _to_browser_thread(_run)
     except Exception as e:
         log.exception("[mcp] extract failed: %s", e)
         return {"url": url, "status": "error", "error": f"{type(e).__name__}: {e}"}
@@ -455,7 +533,7 @@ async def search_app(
     import time as _time
     started = _time.time()
     try:
-        raw = await asyncio.to_thread(_run)
+        raw = await _to_browser_thread(_run)
     except Exception as e:
         log.exception("[mcp] search_app failed: %s", e)
         return {
@@ -515,7 +593,7 @@ async def lookup_app(
         return _lookup(app_url, proxies=proxies, country=country.lower())
 
     try:
-        meta = await asyncio.to_thread(_run)
+        meta = await _to_browser_thread(_run)
     except Exception as e:
         log.exception("[mcp] lookup_app failed: %s", e)
         return {"app_url": app_url, "error": f"{type(e).__name__}: {e}"}
@@ -703,7 +781,7 @@ async def find_competitor_ads(
         }
 
     try:
-        return await asyncio.to_thread(_run)
+        return await _to_browser_thread(_run)
     except Exception as e:
         log.exception("[mcp] find_competitor_ads failed: %s", e)
         return {
@@ -899,7 +977,7 @@ async def download_ad_media(
         )
 
     try:
-        results = await asyncio.to_thread(_run)
+        results = await _to_browser_thread(_run)
     except Exception as e:
         log.exception("[mcp] download_ad_media failed: %s", e)
         return {
@@ -1094,7 +1172,7 @@ async def extract_many(
     import time as _time
     started = _time.time()
     try:
-        results_by_idx = await asyncio.to_thread(_run)
+        results_by_idx = await _to_browser_thread(_run)
     except Exception as e:
         log.exception("[mcp] extract_many failed: %s", e)
         return {
@@ -1133,7 +1211,17 @@ def main() -> None:
     try:
         mcp.run()
     finally:
-        _pool.shutdown()
+        # The browser must be closed from the same thread that launched
+        # it (greenlet affinity), so we submit shutdown through the
+        # dedicated worker rather than calling _pool.shutdown() from
+        # the main thread directly. Pre-fix this would silently raise
+        # a greenlet error during process exit.
+        try:
+            _BROWSER_EXECUTOR.submit(_pool.shutdown).result(timeout=10)
+        except Exception as e:
+            log.warning("[mcp] browser shutdown raised: %s", e)
+        finally:
+            _BROWSER_EXECUTOR.shutdown(wait=True, cancel_futures=True)
 
 
 if __name__ == "__main__":
