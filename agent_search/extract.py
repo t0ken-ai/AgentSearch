@@ -268,6 +268,102 @@ def _collect_images(page, base_url: str, limit: int = 50) -> list[dict[str, str]
     return out
 
 
+def _extract_html_tables_to_markdown(html: str, max_tables: int = 5) -> str:
+    """Convert ``<table>`` elements in HTML to Markdown pipe tables.
+
+    trafilatura's table support is weak — it often flattens cells into
+    a single line of comma-separated text. For benchmark / data-heavy
+    pages this loses the structure that's the whole point of the
+    article. We do a second pass with our own minimal table parser
+    that preserves rows + columns as Markdown.
+
+    Returns a Markdown string (possibly empty) containing one table
+    per source ``<table>``, separated by blank lines. Caller appends
+    this to trafilatura's output under a heading like ``## Tables``.
+
+    Heuristics:
+      * Tables with < 2 rows are dropped (likely layout tables).
+      * Tables wider than 12 columns are dropped (typically nav grids).
+      * Cells are stripped of nested HTML; line breaks become spaces.
+      * The first row becomes the header. If it's empty-only we fall
+        back to "Col 1" / "Col 2" / …
+    """
+    if not html:
+        return ""
+    try:
+        from html.parser import HTMLParser
+    except Exception:
+        return ""
+
+    class _TableHTMLParser(HTMLParser):
+        def __init__(self):
+            super().__init__()
+            self.tables: list[list[list[str]]] = []
+            self._cur_table: list[list[str]] | None = None
+            self._cur_row: list[str] | None = None
+            self._cur_cell: list[str] | None = None
+
+        def handle_starttag(self, tag, attrs):
+            if tag == "table":
+                self._cur_table = []
+            elif tag == "tr" and self._cur_table is not None:
+                self._cur_row = []
+            elif tag in ("td", "th") and self._cur_row is not None:
+                self._cur_cell = []
+
+        def handle_endtag(self, tag):
+            if tag in ("td", "th") and self._cur_cell is not None:
+                txt = " ".join("".join(self._cur_cell).split())
+                if self._cur_row is not None:
+                    self._cur_row.append(txt)
+                self._cur_cell = None
+            elif tag == "tr" and self._cur_row is not None:
+                if self._cur_table is not None and self._cur_row:
+                    self._cur_table.append(self._cur_row)
+                self._cur_row = None
+            elif tag == "table" and self._cur_table is not None:
+                if self._cur_table:
+                    self.tables.append(self._cur_table)
+                self._cur_table = None
+
+        def handle_data(self, data):
+            if self._cur_cell is not None:
+                self._cur_cell.append(data)
+
+    p = _TableHTMLParser()
+    try:
+        p.feed(html)
+    except Exception:
+        return ""
+
+    def _esc(c: str) -> str:
+        return (c or "").replace("|", "\\|").replace("\n", " ").strip()
+
+    out_blocks: list[str] = []
+    for table in p.tables[:max_tables]:
+        if len(table) < 2:
+            continue
+        ncols = max(len(r) for r in table)
+        if ncols > 12 or ncols < 2:
+            continue
+        norm = [r + [""] * (ncols - len(r)) for r in table]
+        header = norm[0]
+        body = norm[1:]
+        if not any(_esc(c) for c in header):
+            header = [f"Col {i+1}" for i in range(ncols)]
+        out_blocks.append(
+            "| " + " | ".join(_esc(c) for c in header) + " |\n"
+            + "| " + " | ".join(["---"] * ncols) + " |\n"
+            + "\n".join(
+                "| " + " | ".join(_esc(c) for c in row) + " |"
+                for row in body
+            )
+        )
+    if not out_blocks:
+        return ""
+    return "\n\n## Tables (extracted)\n\n" + "\n\n".join(out_blocks)
+
+
 def _word_count(text: str) -> int:
     if not text:
         return 0
@@ -360,6 +456,7 @@ def extract_page(
         "challenge_detected": False,
         "challenge_phrase": "",
         "challenge_cleared": True,
+        "tables_extracted": 0,
     }
 
     if url:
@@ -492,6 +589,24 @@ def extract_page(
 
         if md_content or txt_content:
             extractor = "trafilatura"
+
+        # Augment trafilatura output with our own pipe-table conversion
+        # for any <table> elements in the rendered HTML. trafilatura
+        # often flattens table rows into a single comma-separated line,
+        # which destroys the structure that's the whole point of
+        # benchmark / data-heavy pages. The augmented markdown gets
+        # appended to the trafilatura body under a "## Tables" heading.
+        try:
+            tables_md = _extract_html_tables_to_markdown(html)
+            if tables_md and "## Tables (extracted)" not in md_content:
+                md_content = (md_content or "") + tables_md
+                out["tables_extracted"] = tables_md.count("\n## Tables") + (
+                    tables_md.count("\n\n|") // 1
+                )
+                # Simpler: count the leading rows in each table block
+                out["tables_extracted"] = tables_md.count("\n| ---")
+        except Exception as e:
+            log.debug("table augmentation failed: %s", e)
 
     # Fallback: if trafilatura yielded nothing, dump cleaned body text.
     if not txt_content:
