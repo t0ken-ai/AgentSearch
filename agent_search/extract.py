@@ -39,6 +39,91 @@ except Exception as e:  # pragma: no cover
 
 # Auto-scroll heuristics for lazy-loaded pages.
 DEFAULT_MAX_SCROLLS = 3
+
+
+# Phrases that appear in the document <title> when the page is showing
+# a Cloudflare / Akamai / DataDome / PerimeterX challenge interstitial
+# rather than the real site content.
+_CHALLENGE_TITLE_PHRASES = (
+    "just a moment",
+    "checking your browser",
+    "checking if the site connection",
+    "verifying you are human",
+    "attention required",
+    "cf-browser-verification",
+    "ddos protection",
+    "please wait",
+    "human verification",
+    "access denied",
+    "request unsuccessful",
+    "perimeterx",
+    "imperva",
+)
+
+
+def _on_challenge_page(page) -> tuple[bool, str]:
+    """Heuristic: is the current page a bot-challenge interstitial?
+
+    Returns (is_challenge, matched_phrase). False / "" when the page
+    looks like real content.
+    """
+    try:
+        title = (page.title() or "").lower()
+    except Exception:
+        return False, ""
+    for needle in _CHALLENGE_TITLE_PHRASES:
+        if needle in title:
+            return True, needle
+    # Some challenges keep the title empty and put the gate text in the
+    # body. We sample the visible body text cheaply.
+    try:
+        body_sample = page.evaluate(
+            "() => (document.body && document.body.innerText || '').slice(0, 400).toLowerCase()"
+        ) or ""
+    except Exception:
+        body_sample = ""
+    for needle in _CHALLENGE_TITLE_PHRASES:
+        if needle in body_sample:
+            return True, needle
+    return False, ""
+
+
+def _wait_past_cloudflare(page, total_budget_s: float = 15.0) -> tuple[bool, str]:
+    """Poll until the challenge interstitial clears, or budget expires.
+
+    Returns (cleared, last_matched_phrase). When cleared is True, the
+    page can proceed to extraction; when False, the caller should
+    record the diagnosis and return early.
+
+    We do two things during the wait:
+
+    * Poll page.title() every 0.5s — Cloudflare's JS challenge usually
+      finishes in 3-8s on residential / good IPs.
+    * After 5s with no progress, dispatch a small human-like prod
+      (scroll a few hundred pixels, move mouse) to nudge engagement
+      heuristics. This is what most of our adapters do today.
+    """
+    deadline = time.time() + total_budget_s
+    last_matched = ""
+    nudged = False
+    while time.time() < deadline:
+        is_chal, matched = _on_challenge_page(page)
+        if not is_chal:
+            return True, ""
+        last_matched = matched
+        # After ~5s without clearing, give the page a human-like nudge
+        if not nudged and time.time() > deadline - (total_budget_s - 5.0):
+            try:
+                page.mouse.move(400, 400)
+                page.mouse.move(450, 410, steps=5)
+                page.evaluate("() => window.scrollBy(0, 200)")
+                nudged = True
+            except Exception:
+                pass
+        time.sleep(0.5)
+    return False, last_matched
+
+
 SCROLL_PAUSE_S = 0.8
 
 # Selectors of "Load more" / "Show more" / pagination buttons we'll click
@@ -272,6 +357,9 @@ def extract_page(
         "load_more_clicks": 0,
         "selector_waited": wait_for_selector or "",
         "selector_matched": False,
+        "challenge_detected": False,
+        "challenge_phrase": "",
+        "challenge_cleared": True,
     }
 
     if url:
@@ -285,6 +373,32 @@ def extract_page(
         out["url"] = page.url
     except Exception:
         pass
+
+    # Auto-cascade for Cloudflare / Akamai / DataDome / PerimeterX
+    # interstitials. CloakBrowser passes most challenges natively, but
+    # some sites (businessofapps, several news portals on hot IP ranges)
+    # still drop a "Just a moment..." gate that takes 5-15s of JS work.
+    # We poll, then nudge with a human-like prod, then surface a
+    # diagnostic when we still can't get past.
+    chal, matched = _on_challenge_page(page)
+    out["challenge_detected"] = chal
+    out["challenge_phrase"] = matched
+    if chal:
+        log.info("[extract] challenge interstitial: %r — waiting", matched)
+        cleared, last_matched = _wait_past_cloudflare(page, total_budget_s=15.0)
+        out["challenge_cleared"] = cleared
+        if not cleared:
+            out["challenge_phrase"] = last_matched or matched
+            out["status"] = "cloudflare_blocked"
+            out["error"] = (
+                f"page is still showing a bot-challenge interstitial "
+                f"after 15s ({last_matched or matched!r}). The site's "
+                f"challenge JS may need a fresh IP, a headed browser, "
+                f"or a longer wait."
+            )
+            # We still attempt the rest of extraction so the caller has
+            # *something*, but the marker is the source of truth.
+            log.warning("[extract] CF gate not cleared at %s", out["url"])
 
     # Wait for a custom selector (e.g. a JS-rendered widget) before
     # falling through to scroll/extract. If the selector never appears,
