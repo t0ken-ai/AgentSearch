@@ -312,6 +312,106 @@ def _split_host_path(spec: str) -> tuple[str, str]:
     return spec, ""
 
 
+def list_platforms() -> list[str]:
+    """Return all preset platform aliases (sorted)."""
+    return sorted(_PRESETS.keys())
+
+
+# ---------------------------------------------------------------------------
+# Categorisation — exposed so the MCP tool ``list_dev_docs_platforms``
+# (and any future reporting tool) can group presets without hardcoding
+# its own copy. Adding a new preset:
+#   1. add a ``"<alias>": [<hosts>]`` row to _PRESETS above
+#   2. add ``"<alias>"`` to one of the lists below (or leave it
+#      uncategorised — list_dev_docs_platforms will still find it
+#      via its substring filter, just without a category tag).
+# ---------------------------------------------------------------------------
+
+_CATEGORIES: dict[str, list[str]] = {
+    "cloud_infra": [
+        "google-cloud", "gcp", "aws", "azure", "microsoft", "docker",
+        "kubernetes", "k8s", "hashicorp", "terraform", "github",
+        "gitlab", "cloudflare", "vercel", "netlify", "fly", "render",
+    ],
+    "apis_saas": [
+        "stripe", "twilio", "slack", "discord", "shopify", "supabase",
+        "firebase", "mongodb", "redis", "postgres", "postgresql",
+        "mysql", "elasticsearch",
+    ],
+    "social": [
+        "tiktok", "tiktok-business", "tiktok-marketing", "tiktok-login",
+        "snap", "snapchat", "snap-marketing", "twitter", "x",
+        "pinterest", "reddit", "linkedin", "youtube",
+    ],
+    "messaging": [
+        "whatsapp", "whatsapp-business", "whatsapp-cloud",
+        "telegram", "telegram-bot", "messenger", "line", "viber",
+        "wechat", "wechat-pay", "kakao", "instagram", "threads",
+    ],
+    "meta_megasite": [
+        "meta", "facebook", "instagram", "messenger", "threads",
+        "whatsapp",
+    ],
+    "google_products": [
+        "google-cloud", "gcp", "firebase", "google-ads",
+        "google-analytics", "google-maps", "google-pay", "youtube",
+        "google-ai", "gemini",
+    ],
+    "mobile_ad_intel": [
+        "data.ai", "data-ai", "appannie", "sensortower", "appsflyer",
+        "appsflyer-performance-index", "appsflyer-pi",
+        "appsflyer-benchmarks", "appsflyer-bench",
+        "adjust", "branch", "branch.io",
+        "applovin", "applovin-max", "bigspy",
+        "similarweb", "admiral", "getadmiral", "businessofapps", "boa",
+        "qimai", "qimai.cn", "七麦", "qimai-international",
+        "diandian", "点点数据", "dianshu",
+    ],
+    "ai_ml": [
+        "openai", "anthropic", "claude", "huggingface", "hf",
+        "cohere", "pinecone", "google-ai", "gemini", "langchain",
+        "llamaindex",
+    ],
+    "frontend": [
+        "mdn", "mozilla", "react", "vue", "angular", "svelte",
+        "nextjs", "next", "remix", "nuxt", "nodejs", "node", "deno",
+        "bun", "python", "typescript", "rust", "go", "golang",
+    ],
+    "mobile_dev": [
+        "android", "apple", "ios", "swift", "flutter",
+        "react-native", "expo",
+    ],
+    "browsers": ["chrome", "webkit"],
+    "observability": [
+        "datadog", "grafana", "prometheus", "sentry", "opentelemetry",
+    ],
+    "identity": ["auth0", "okta", "clerk"],
+    "workspace": ["notion", "airtable", "linear"],
+    "ml_training": ["wandb", "mlflow", "ray"],
+}
+
+
+def list_categories() -> list[str]:
+    """Return the high-level category names."""
+    return list(_CATEGORIES.keys())
+
+
+def categories_for(alias: str) -> list[str]:
+    """Return every category that contains a preset alias."""
+    a = (alias or "").lower()
+    return [cat for cat, lst in _CATEGORIES.items() if a in lst]
+
+
+def uncategorised_presets() -> list[str]:
+    """Presets that exist in _PRESETS but aren't tagged in _CATEGORIES.
+
+    Useful as a maintenance check — surfaces gaps where a new preset
+    was added without updating the category map.
+    """
+    in_cats = {p for lst in _CATEGORIES.values() for p in lst}
+    return sorted(p for p in _PRESETS if p not in in_cats)
+
+
 # ---------------------------------------------------------------------------
 # Engine
 # ---------------------------------------------------------------------------

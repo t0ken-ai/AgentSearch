@@ -941,71 +941,11 @@ async def list_dev_docs_platforms(
         ``{"count", "categories": {<name>: [aliases]}, "platforms": [
         {"alias", "hosts", "host_count"}, ...]}``
     """
-    from .engines.dev_docs import _PRESETS, list_platforms
+    from .engines.dev_docs import (
+        _PRESETS, list_platforms, _CATEGORIES, list_categories,
+    )
 
-    # Categorisation — mirrors the README preset table. Hardcoded
-    # rather than auto-derived because the categories are editorial
-    # (a single host like developers.facebook.com appears under both
-    # 'meta' and 'whatsapp', and which is "primary" depends on intent).
-    cat_map: dict[str, list[str]] = {
-        "cloud_infra": [
-            "google-cloud", "gcp", "aws", "azure", "microsoft", "docker",
-            "kubernetes", "k8s", "hashicorp", "terraform", "github",
-            "gitlab", "cloudflare", "vercel", "netlify", "fly", "render",
-        ],
-        "apis_saas": [
-            "stripe", "twilio", "slack", "discord", "shopify", "supabase",
-            "firebase", "mongodb", "redis", "postgres", "postgresql",
-            "mysql", "elasticsearch",
-        ],
-        "social": [
-            "tiktok", "tiktok-business", "tiktok-marketing", "tiktok-login",
-            "snap", "snapchat", "snap-marketing", "twitter", "x",
-            "pinterest", "reddit", "linkedin", "youtube",
-        ],
-        "messaging": [
-            "whatsapp", "whatsapp-business", "whatsapp-cloud",
-            "telegram", "telegram-bot", "messenger", "line", "viber",
-            "wechat", "wechat-pay", "kakao", "instagram", "threads",
-        ],
-        "meta_megasite": [
-            "meta", "facebook", "instagram", "messenger", "threads",
-            "whatsapp",
-        ],
-        "google_products": [
-            "google-cloud", "gcp", "firebase", "google-ads",
-            "google-analytics", "google-maps", "google-pay", "youtube",
-            "google-ai", "gemini",
-        ],
-        "mobile_ad_intel": [
-            "data.ai", "appannie", "sensortower", "appsflyer",
-            "appsflyer-performance-index", "appsflyer-benchmarks",
-            "adjust", "branch", "applovin", "applovin-max", "bigspy",
-            "similarweb", "admiral", "getadmiral", "businessofapps",
-            "qimai", "七麦", "diandian", "点点数据",
-        ],
-        "ai_ml": [
-            "openai", "anthropic", "claude", "huggingface", "hf",
-            "cohere", "pinecone", "google-ai", "gemini", "langchain",
-            "llamaindex",
-        ],
-        "frontend": [
-            "mdn", "mozilla", "react", "vue", "angular", "svelte",
-            "nextjs", "next", "remix", "nuxt", "nodejs", "node", "deno",
-            "bun", "python", "typescript", "rust", "go", "golang",
-        ],
-        "mobile_dev": [
-            "android", "apple", "ios", "swift", "flutter",
-            "react-native", "expo",
-        ],
-        "browsers": ["chrome", "webkit"],
-        "observability": [
-            "datadog", "grafana", "prometheus", "sentry", "opentelemetry",
-        ],
-        "identity": ["auth0", "okta", "clerk"],
-        "workspace": ["notion", "airtable", "linear"],
-        "ml_training": ["wandb", "mlflow", "ray"],
-    }
+    cat_map = _CATEGORIES
 
     if category and category not in cat_map:
         return {
