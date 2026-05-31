@@ -58,6 +58,8 @@ _CASES: list[tuple[str, str, dict, str]] = [
     # Ad lib (needs country)
     ("instagram_ad_library", "Shopify",            {"country": "US"},
                                                           "facebook.com/ads/library"),
+    # Company / funding intelligence
+    ("crunchbase",         "OpenAI",               {}, "crunchbase.com"),
 ]
 
 
