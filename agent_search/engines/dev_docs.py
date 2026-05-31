@@ -147,6 +147,10 @@ _PRESETS: dict[str, list[str]] = {
     "google-analytics":    ["developers.google.com/analytics"],
     "google-maps":         ["developers.google.com/maps"],
     "google-pay":          ["developers.google.com/pay"],
+    # Play Console help — operator-facing, not a dev portal but
+    # frequently needed for policy + listing requirements.
+    "play-console":        ["support.google.com/googleplay/android-developer"],
+    "google-play":         ["support.google.com/googleplay/android-developer"],
 
     # Other messaging / social platforms
     "line":                ["developers.line.biz"],
@@ -378,7 +382,7 @@ _CATEGORIES: dict[str, list[str]] = {
     "google_products": [
         "google-cloud", "gcp", "firebase", "google-ads",
         "google-analytics", "google-maps", "google-pay", "youtube",
-        "google-ai", "gemini",
+        "google-ai", "gemini", "play-console", "google-play",
     ],
     "mobile_ad_intel": [
         "data.ai", "data-ai", "appannie", "sensortower", "appsflyer",
@@ -436,6 +440,85 @@ def uncategorised_presets() -> list[str]:
     """
     in_cats = {p for lst in _CATEGORIES.values() for p in lst}
     return sorted(p for p in _PRESETS if p not in in_cats)
+
+
+# ---------------------------------------------------------------------------
+# Compliance metadata — flags presets that have explicit terms about
+# verbatim quoting, redistribution, or forwarding restrictions. The
+# engine attaches these flags to every result it returns so the
+# calling agent can decide whether to quote verbatim, paraphrase, or
+# refuse to surface entirely.
+#
+# Schema:
+#   {<alias>: {
+#       "verbatim_quote_limit": <int | None>,
+#         # max words an LLM should quote verbatim. None = no limit.
+#       "redistribution":  <"allowed" | "attribution" | "forbidden">,
+#       "notes":           <str>,
+#   }, ...}
+# ---------------------------------------------------------------------------
+
+_COMPLIANCE_FLAGS: dict[str, dict] = {
+    # Sensor Tower / data.ai estimates are explicitly non-redistributable
+    # under their public terms — agents should paraphrase, not quote.
+    "data.ai": {
+        "verbatim_quote_limit": 0,
+        "redistribution": "forbidden",
+        "notes": "Estimate data — terms forbid redistribution. Paraphrase only.",
+    },
+    "data-ai": {"verbatim_quote_limit": 0, "redistribution": "forbidden",
+                "notes": "Same as data.ai."},
+    "appannie": {"verbatim_quote_limit": 0, "redistribution": "forbidden",
+                 "notes": "Legacy name for data.ai."},
+    "sensortower": {
+        "verbatim_quote_limit": 0,
+        "redistribution": "forbidden",
+        "notes": "Estimate data — terms forbid redistribution. Paraphrase only.",
+    },
+    # Statista paywall + redistribution restrictions for premium content
+    "statista": {
+        "verbatim_quote_limit": 30,
+        "redistribution": "attribution",
+        "notes": "Free tier covers headline number; full reports paywalled.",
+    },
+    "emarketer": {
+        "verbatim_quote_limit": 30,
+        "redistribution": "attribution",
+        "notes": "Forecast figures often quoted; require source citation.",
+    },
+    "insiderintelligence": {
+        "verbatim_quote_limit": 30,
+        "redistribution": "attribution",
+        "notes": "Same publisher as eMarketer.",
+    },
+    # Crunchbase free tier — profile listings are quotable, premium data not
+    "crunchbase": {
+        "verbatim_quote_limit": 100,
+        "redistribution": "attribution",
+        "notes": "Public profile + funding round data freely citable; "
+                 "Pro/Enterprise data not.",
+    },
+    # AppsFlyer / Adjust / Branch reports are explicitly meant to be
+    # cited (marketing material), no special restrictions.
+    "appsflyer-performance-index": {
+        "verbatim_quote_limit": None, "redistribution": "attribution",
+        "notes": "AppsFlyer publishes PI to encourage citation.",
+    },
+    "appsflyer-pi": {
+        "verbatim_quote_limit": None, "redistribution": "attribution",
+        "notes": "Alias for appsflyer-performance-index.",
+    },
+}
+
+
+def compliance_flags(alias: str) -> dict:
+    """Return compliance metadata for a preset alias.
+
+    Returns an empty dict when the preset has no special flags. Use
+    ``.get('verbatim_quote_limit')`` / ``.get('redistribution')`` to
+    branch.
+    """
+    return dict(_COMPLIANCE_FLAGS.get((alias or "").lower(), {}))
 
 
 # ---------------------------------------------------------------------------
@@ -641,6 +724,12 @@ class DevDocsEngine(BaseEngine):
                 "product": product or "",
                 "api_version": api_version or self._infer_version(url),
             })
+            # Attach compliance metadata when the platform has any —
+            # lets downstream agents know whether to quote verbatim,
+            # paraphrase, or refuse to surface entirely.
+            cflags = compliance_flags(resolved_platform)
+            if cflags:
+                r.__dict__["compliance"] = cflags
             kept.append(r)
             if len(kept) >= limit:
                 break
