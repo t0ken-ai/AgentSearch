@@ -139,6 +139,43 @@ AgentSearch ships an MCP server exposing **9 tools**. Configure once in Kiro / C
 | **`find_competitor_ads`** | `app_url, platforms[], limit_per_platform, country, precise, proxy_url` | App URL → fan-out to Meta/IG/Google/TikTok ad libraries → merged ad stream |
 | **`download_ad_media`** | `records[], output_dir, proxy_url, max_per_record, max_workers, timeout` | Bulk-download every image / video URL from a list of ad-engine results |
 
+### 💡 Two patterns that save the most time
+
+**1. `depth=N` — search + read top N bodies in one call**
+
+Most agents call `search`, pick the top 3 hits, then call `extract` 3
+times. That's 4 MCP round-trips. Pass `depth=3` to `search` and the
+top 3 results come back with `body_markdown` already attached:
+
+```jsonc
+search(query="adjust 2026 mobile app report",
+       engine="dev_docs",
+       engine_options={"platform": "ppc.land"},
+       limit=5,
+       depth=3)
+// → 5 SERP hits; first 3 also have body_markdown + body_word_count
+```
+
+Use `depth` whenever the user asked for content (a report, tutorial,
+analysis) rather than just URLs. Saves ~3-5x interaction time.
+
+**2. `extract_many` — read a whole list of URLs in one call**
+
+When the agent already has a list of URLs (from a previous call,
+from a roundup article, from the user) batch them into one
+`extract_many` call rather than looping `extract`:
+
+```jsonc
+extract_many(
+  urls=["https://ppc.land/adjusts-2026-mobile-app-report-...",
+        "https://ppc.land/shopping-app-installs-surge-61-globally...",
+        "https://www.appsflyer.com/resources/reports/performance-index/"],
+  paginate=true, max_scrolls=3,
+)
+```
+
+Returns one record per URL (preserves order, validates http(s)).
+
 ### `engine_options` cheat-sheet (the killer feature)
 
 `engine_options` is a dict forwarded to `EngineClass.search()` so engine-specific parameters work through MCP:
