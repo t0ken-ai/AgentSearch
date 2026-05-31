@@ -1143,6 +1143,17 @@ async def list_engines() -> dict[str, Any]:
     categories = {
         "general": ["google", "bing", "duckduckgo", "brave", "yandex", "startpage", "ecosia", "qwant"],
         "chinese_search": ["baidu", "sogou", "so360"],
+        "korean_search": ["naver", "daum"],
+        "japanese_search": ["yahoo_japan"],
+        "russian_search": ["yandex", "mail_ru"],
+        "european_local": ["seznam", "qwant", "ecosia", "startpage"],
+        "southeast_asian": ["coccoc"],
+        "image_search": [
+            "google_images", "bing_images", "duckduckgo_images",
+            "brave_images", "yandex_images",
+            "baidu_images", "sogou_images", "so360_images",
+            "naver_images", "daum_images", "yahoo_japan_images",
+        ],
         "code_dev": ["github", "github_search", "stackoverflow", "hackernews", "npm", "npm_search", "devto"],
         "ai_research": ["huggingface", "arxiv"],
         "knowledge": ["wikipedia", "wikivoyage", "pubmed", "wolfram"],
@@ -1194,6 +1205,9 @@ async def list_engines() -> dict[str, Any]:
             "lookup_app               — single-app metadata from URL or id",
             "find_competitor_ads      — App URL → ads on Meta/IG/Google/TikTok",
             "download_ad_media        — bulk-download every image/video URL from ad results",
+            "image_search             — single-engine image search (Google/Bing/Yandex/Baidu/Naver/...)",
+            "image_search_many        — parallel multi-engine image search with merged dedupe",
+            "download_images          — bulk-download image_search results to disk",
         ],
         # Common engine_options examples for the most-used engines —
         # surfaced here so a curious agent can call list_engines once
@@ -2508,6 +2522,508 @@ async def ads_batch(
     if include_ads:
         out["ads_by_app"] = ads_by_app
     return out
+
+
+# ---------------------------------------------------------------------------
+# Image search + bulk download
+# ---------------------------------------------------------------------------
+
+# Engines that expose an image-search adapter (is_image_engine=True).
+# Listed here for the docstring + for `image_search_many`'s default set.
+_IMAGE_ENGINES_DEFAULT = (
+    "google_images", "bing_images", "duckduckgo_images",
+    "baidu_images", "yandex_images", "sogou_images",
+    "so360_images", "brave_images", "naver_images",
+    "yahoo_japan_images", "daum_images",
+)
+
+
+def _is_image_engine_class(cls) -> bool:
+    return bool(getattr(cls, "is_image_engine", False))
+
+
+@mcp.tool()
+async def image_search(
+    query: str,
+    engine: str = "bing_images",
+    limit: int = 20,
+) -> dict[str, Any]:
+    """🖼️ Search for images on a single image-search engine.
+
+    Triggers:
+      "find images of X" / "search Google Images for"
+      "show me pictures of <topic>"
+      "百度图片 / Baidu images / Yandex images / Naver images"
+      "高清图片 <something>" / "wallpaper of"
+
+    Available engines (call ``list_engines`` for the live list):
+      • Western: ``google_images``, ``bing_images``, ``duckduckgo_images``,
+                 ``brave_images``, ``yandex_images``
+      • Chinese: ``baidu_images``, ``sogou_images``, ``so360_images``
+      • Korean:  ``naver_images``, ``daum_images``
+      • Japanese: ``yahoo_japan_images``
+
+    Each result has ``image_url`` (downloadable), ``thumbnail_url``,
+    ``source_page_url`` (page hosting the image), ``title``, ``width``
+    / ``height`` when available, and ``source_engine``. Pair with
+    ``download_images`` to materialise to disk in one round-trip.
+
+    Args:
+        query: Free-text search term.
+        engine: Image-engine handle (default ``bing_images`` — most
+            permissive; gives full-resolution URLs).
+        limit: Max images to return (default 20, ceiling 100).
+
+    Returns:
+        ``{"engine": str, "query": str, "count": int,
+           "results": [<ImageSearchResult-as-dict>, ...]}``
+    """
+    limit = max(1, min(int(limit), 100))
+    try:
+        engine_cls = _get_engine(engine)
+    except ValueError as e:
+        return {
+            "engine": engine, "query": query,
+            "error": str(e), "count": 0, "results": [],
+        }
+    if not _is_image_engine_class(engine_cls):
+        return {
+            "engine": engine, "query": query,
+            "error": (
+                f"engine {engine!r} is not an image-search engine. "
+                f"Use one of: {sorted(_IMAGE_ENGINES_DEFAULT)}"
+            ),
+            "count": 0, "results": [],
+        }
+
+    def _run():
+        page = _pool.page()
+        try:
+            inst = engine_cls(page)
+            return inst.search(query, limit=limit) or []
+        finally:
+            try:
+                page.close()
+            except Exception:
+                pass
+
+    try:
+        raw = await _to_browser_thread(_run)
+    except Exception as e:
+        log.exception("[mcp] image_search failed: %s", e)
+        return {
+            "engine": engine, "query": query,
+            "error": f"{type(e).__name__}: {e}",
+            "count": 0, "results": [],
+        }
+
+    results = [r.to_dict() for r in raw]
+    return {
+        "engine": engine,
+        "query": query,
+        "count": len(results),
+        "results": results,
+    }
+
+
+@mcp.tool()
+async def image_search_many(
+    query: str,
+    engines: list[str] | None = None,
+    limit: int = 10,
+    timeout_s: int = 90,
+) -> dict[str, Any]:
+    """🖼️🔀 Search images across MULTIPLE engines in parallel.
+
+    Triggers:
+      "find images on Google AND Bing AND Yandex"
+      "cross-search for pictures of X"
+      "image search across multiple sources"
+
+    Each engine launches its own browser (Playwright greenlet
+    affinity), so wall-clock ≈ ``max(per-engine time)`` instead of
+    ``sum``. Results are merged + de-duped by ``image_url``.
+
+    Args:
+        query: Free-text search term.
+        engines: Image-engine handles to query in parallel. Default
+            is the full set: google_images + bing_images +
+            duckduckgo_images + baidu_images + yandex_images +
+            sogou_images + so360_images + brave_images +
+            naver_images + yahoo_japan_images + daum_images.
+        limit: Per-engine result cap (default 10).
+        timeout_s: Hard deadline for the fan-out. Default 90s.
+
+    Returns:
+        ``{
+          "query":       str,
+          "engines":     [<requested engines>],
+          "per_engine":  {<engine>: {"ok", "count", "results", "elapsed_s"}},
+          "merged":      [<unique image results across all engines>],
+          "elapsed_s":   float,
+          "successful":  int
+        }``
+    """
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+    import time as _time
+
+    src_list = list(engines) if engines else list(_IMAGE_ENGINES_DEFAULT)
+    # De-dupe preserving order.
+    seen = set()
+    unique = []
+    for e in src_list:
+        if e not in seen:
+            unique.append(e); seen.add(e)
+    src_list = unique
+
+    limit = max(1, min(int(limit), 50))
+
+    def _one_engine(name: str) -> dict[str, Any]:
+        from .core import BrowserConfig, launch, new_page
+        started = _time.time()
+        try:
+            engine_cls = _get_engine(name)
+        except ValueError as e:
+            return {"engine": name, "ok": False, "error": str(e),
+                    "count": 0, "results": [],
+                    "elapsed_s": round(_time.time() - started, 2)}
+        if not _is_image_engine_class(engine_cls):
+            return {"engine": name, "ok": False,
+                    "error": "not an image engine",
+                    "count": 0, "results": [],
+                    "elapsed_s": round(_time.time() - started, 2)}
+        browser = None
+        try:
+            browser = launch(BrowserConfig(headless=HEADLESS, humanize=True))
+            page = new_page(browser)
+            inst = engine_cls(page)
+            raw = inst.search(query, limit=limit) or []
+            return {
+                "engine": name, "ok": True,
+                "count": len(raw),
+                "results": [r.to_dict() for r in raw],
+                "elapsed_s": round(_time.time() - started, 2),
+            }
+        except Exception as e:
+            log.warning("[mcp] image_search_many engine %s failed: %s", name, e)
+            return {"engine": name, "ok": False,
+                    "error": f"{type(e).__name__}: {e}",
+                    "count": 0, "results": [],
+                    "elapsed_s": round(_time.time() - started, 2)}
+        finally:
+            if browser is not None:
+                try: browser.close()
+                except Exception: pass
+
+    def _run() -> dict[str, Any]:
+        per_engine: dict[str, dict[str, Any]] = {}
+        workers = min(len(src_list), 6)
+        with ThreadPoolExecutor(max_workers=workers) as ex:
+            futures = {ex.submit(_one_engine, n): n for n in src_list}
+            for fut in as_completed(futures, timeout=timeout_s):
+                name = futures[fut]
+                try:
+                    per_engine[name] = fut.result(timeout=1)
+                except Exception as e:
+                    per_engine[name] = {
+                        "engine": name, "ok": False,
+                        "error": f"{type(e).__name__}: {e}",
+                        "count": 0, "results": [],
+                    }
+        # Make sure every requested engine has a row
+        for n in src_list:
+            per_engine.setdefault(n, {
+                "engine": n, "ok": False,
+                "error": "timeout / future never completed",
+                "count": 0, "results": [],
+            })
+        # Merge + de-dupe by image_url
+        merged: list[dict[str, Any]] = []
+        seen_urls: set[str] = set()
+        for n in src_list:
+            for r in per_engine[n].get("results", []):
+                u = r.get("image_url") or ""
+                if not u or u in seen_urls:
+                    continue
+                seen_urls.add(u)
+                merged.append(r)
+        return {
+            "query": query,
+            "engines": src_list,
+            "per_engine": per_engine,
+            "merged": merged,
+            "successful": sum(1 for v in per_engine.values()
+                              if v.get("ok") and v.get("count", 0) > 0),
+        }
+
+    started = _time.time()
+    try:
+        out = await asyncio.to_thread(_run)
+    except Exception as e:
+        log.exception("[mcp] image_search_many failed: %s", e)
+        return {
+            "query": query, "engines": src_list,
+            "per_engine": {}, "merged": [],
+            "successful": 0,
+            "elapsed_s": round(_time.time() - started, 2),
+            "error": f"{type(e).__name__}: {e}",
+        }
+    out["elapsed_s"] = round(_time.time() - started, 2)
+    return out
+
+
+@mcp.tool()
+async def download_images(
+    images: list[dict[str, Any]],
+    output_dir: str = "./images",
+    proxy_url: str | None = None,
+    max_workers: int = 6,
+    timeout: int = 30,
+    overwrite: bool = False,
+    prefer: str = "image_url",
+) -> dict[str, Any]:
+    """🖼️⬇️ Bulk-download a list of image-search results to disk.
+
+    Pair this with ``image_search`` / ``image_search_many``: pass the
+    ``results`` array straight in and every image_url is fetched in
+    parallel. Filenames embed the engine handle and an index for
+    traceable swipe files.
+
+    Triggers:
+      "save these images to disk" / "download all the images"
+      "build a swipe folder of these pictures"
+
+    Args:
+        images: List of image-result dicts. Accepts any of:
+              * ``image_search`` results: ``[{"image_url", "thumbnail_url",
+                "source_page_url", "title", "source_engine", ...}]``
+              * Plain URL strings: ``["https://.../a.jpg", ...]``
+              * Mixed.
+        output_dir: Local folder. Created if missing.
+        proxy_url: Optional ``http(s)://[user:pass@]host:port``. Falls
+            back to ``FLUXISP_PROXY`` / ``HTTPS_PROXY`` / ``HTTP_PROXY``.
+        max_workers: Concurrent downloads (default 6).
+        timeout: Per-download timeout in seconds (default 30).
+        overwrite: When False (default), skip URLs whose filename
+            already exists in ``output_dir``.
+        prefer: Which URL field to download from each record —
+            ``"image_url"`` (default, full-res) or ``"thumbnail_url"``
+            (smaller, faster).
+
+    Returns:
+        ``{
+          "output_dir":  str,
+          "total":       int,
+          "succeeded":   int,
+          "failed":      int,
+          "skipped":     int,
+          "bytes":       int,
+          "files": [
+            {"image_url", "local_path", "success", "error",
+             "file_size", "content_type", "source_engine",
+             "source_page_url", "title", "skipped": bool},
+            ...
+          ]
+        }``
+    """
+    import os as _os
+    from urllib.parse import urlparse, unquote
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+    import re as _re
+
+    eff_proxy = (
+        proxy_url
+        or os.environ.get("FLUXISP_PROXY")
+        or os.environ.get("HTTPS_PROXY")
+        or os.environ.get("HTTP_PROXY")
+    )
+    abs_out = _os.path.abspath(output_dir)
+    _os.makedirs(abs_out, exist_ok=True)
+
+    # Normalise input → (url, source_engine, source_page, title)
+    plan: list[tuple[int, str, str, str, str, str]] = []
+    invalid: dict[int, dict[str, Any]] = {}
+    for i, item in enumerate(images or []):
+        if isinstance(item, str):
+            url = item.strip()
+            engine_tag = ""
+            page = ""
+            title = ""
+        elif isinstance(item, dict):
+            url = (item.get(prefer) or item.get("image_url")
+                   or item.get("thumbnail_url") or "").strip()
+            engine_tag = (item.get("source_engine") or "").strip()
+            page = (item.get("source_page_url") or "").strip()
+            title = (item.get("title") or "").strip()
+        else:
+            url, engine_tag, page, title = "", "", "", ""
+
+        if not url or not url.lower().startswith(("http://", "https://")):
+            invalid[i] = {
+                "image_url": url, "local_path": "", "success": False,
+                "error": "must be an http(s) URL",
+                "file_size": 0, "content_type": "",
+                "source_engine": engine_tag,
+                "source_page_url": page, "title": title,
+                "skipped": False,
+            }
+            continue
+
+        # Build filename: <engine>_<idx>_<sanitised-stem>.<ext>
+        try:
+            path = urlparse(url).path or "/"
+            stem = unquote(_os.path.basename(path) or "img")
+        except Exception:
+            stem = "img"
+        # Sanitise
+        stem = _re.sub(r"[^A-Za-z0-9._-]", "_", stem) or "img"
+        if "." not in stem:
+            # Heuristic — let the response set the extension instead
+            ext_hint = ""
+        else:
+            ext_hint = ""
+        prefix = (engine_tag.replace("_", "-") + "_") if engine_tag else ""
+        # Cap stem length
+        if len(stem) > 80:
+            stem = stem[:80]
+        fname = f"{prefix}{i:04d}_{stem}"
+        if len(fname) > 180:
+            fname = fname[:180]
+        plan.append((i, url, _os.path.join(abs_out, fname), engine_tag, page, title))
+
+    def _ext_from_content_type(ct: str) -> str:
+        ct = (ct or "").lower().split(";")[0].strip()
+        return {
+            "image/jpeg": ".jpg", "image/jpg": ".jpg",
+            "image/png": ".png", "image/gif": ".gif",
+            "image/webp": ".webp", "image/avif": ".avif",
+            "image/bmp": ".bmp", "image/tiff": ".tiff",
+            "image/svg+xml": ".svg",
+        }.get(ct, "")
+
+    def _download_one(url: str, dest_base: str, engine_tag: str,
+                      page: str, title: str) -> dict[str, Any]:
+        rec: dict[str, Any] = {
+            "image_url": url, "local_path": dest_base, "success": False,
+            "error": "", "file_size": 0, "content_type": "",
+            "source_engine": engine_tag, "source_page_url": page,
+            "title": title, "skipped": False,
+        }
+        # If a file matching <dest_base>.* already exists, optionally skip.
+        if not overwrite:
+            for cand_ext in (".jpg", ".jpeg", ".png", ".webp", ".gif",
+                             ".avif", ".bmp", ".tiff", ".svg", ""):
+                cand = dest_base + cand_ext
+                if _os.path.exists(cand):
+                    rec["local_path"] = cand
+                    rec["success"] = True
+                    rec["skipped"] = True
+                    try:
+                        rec["file_size"] = _os.path.getsize(cand)
+                    except Exception:
+                        pass
+                    return rec
+        try:
+            import requests
+            session = requests.Session()
+            if eff_proxy:
+                session.proxies.update(
+                    {"http": eff_proxy, "https": eff_proxy})
+            session.headers.setdefault(
+                "user-agent",
+                "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+                "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/145.0.0.0 "
+                "Safari/537.36")
+            with session.get(url, timeout=timeout, stream=True,
+                             allow_redirects=True) as r:
+                r.raise_for_status()
+                ct = r.headers.get("Content-Type") or ""
+                rec["content_type"] = ct
+                ext = _ext_from_content_type(ct)
+                # If URL already has an extension and dest_base has none, use URL's
+                if not ext:
+                    try:
+                        from urllib.parse import urlparse as _up
+                        p = _up(url).path.lower()
+                        for e in (".jpg", ".jpeg", ".png", ".webp", ".gif",
+                                  ".avif", ".bmp", ".tiff", ".svg"):
+                            if p.endswith(e):
+                                ext = e
+                                break
+                    except Exception:
+                        pass
+                if not ext:
+                    ext = ".bin"
+                final_path = dest_base + ext
+                total = 0
+                with open(final_path, "wb") as fh:
+                    for chunk in r.iter_content(64 * 1024):
+                        if chunk:
+                            fh.write(chunk)
+                            total += len(chunk)
+                rec["local_path"] = final_path
+                rec["file_size"] = total
+            rec["success"] = True
+        except Exception as e:
+            rec["error"] = f"{type(e).__name__}: {e}"
+            try:
+                if rec["local_path"] and _os.path.exists(rec["local_path"]):
+                    _os.remove(rec["local_path"])
+            except Exception:
+                pass
+        return rec
+
+    def _run() -> dict[int, dict[str, Any]]:
+        out: dict[int, dict[str, Any]] = {}
+        if not plan:
+            return out
+        workers = max(1, min(int(max_workers), 16, len(plan)))
+        with ThreadPoolExecutor(max_workers=workers) as ex:
+            fut_to_idx = {
+                ex.submit(_download_one, url, dest, eng, page, title): i
+                for (i, url, dest, eng, page, title) in plan
+            }
+            for fut in as_completed(fut_to_idx):
+                i = fut_to_idx[fut]
+                try:
+                    out[i] = fut.result()
+                except Exception as e:
+                    out[i] = {
+                        "image_url": "", "local_path": "",
+                        "success": False,
+                        "error": f"{type(e).__name__}: {e}",
+                        "file_size": 0, "content_type": "",
+                        "source_engine": "", "source_page_url": "",
+                        "title": "", "skipped": False,
+                    }
+        return out
+
+    try:
+        results = await asyncio.to_thread(_run)
+    except Exception as e:
+        log.exception("[mcp] download_images failed: %s", e)
+        return {
+            "output_dir": abs_out, "total": len(images or []),
+            "succeeded": 0, "failed": len(images or []), "skipped": 0,
+            "bytes": 0, "files": list(invalid.values()),
+            "error": f"{type(e).__name__}: {e}",
+        }
+
+    merged_dict = {**results, **invalid}
+    ordered = [merged_dict[i] for i in sorted(merged_dict.keys())]
+    succeeded = sum(1 for r in ordered if r.get("success"))
+    skipped = sum(1 for r in ordered if r.get("skipped"))
+    bytes_total = sum(
+        r.get("file_size") or 0 for r in ordered if r.get("success"))
+    return {
+        "output_dir": abs_out,
+        "total": len(ordered),
+        "succeeded": succeeded,
+        "failed": len(ordered) - succeeded,
+        "skipped": skipped,
+        "bytes": bytes_total,
+        "files": ordered,
+    }
 
 
 # ----------------------------------------------------------------------- main
