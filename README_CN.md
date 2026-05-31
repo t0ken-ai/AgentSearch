@@ -171,7 +171,7 @@ Unsplash · Pixabay · Pexels · Pinterest
 **📣 广告情报 (5) + 应用商店搜索** 🆕
 Meta Ad Library · Instagram Ad Library · Google Ads Transparency · TikTok Creative Center · TikTok Ad Library · Apple App Store · Google Play
 
-**📚 开发者文档 (115 个平台)** 🆕
+**📚 开发者文档 (142 个平台)** 🆕
 Meta / Facebook · Stripe · OpenAI · Anthropic · AWS · Google Cloud · Azure · GitHub · Kubernetes · Docker · React · Vue · Next.js · Python · Node · Rust · Go · MDN · Apple · Android · Flutter · MongoDB · Redis · Postgres · HuggingFace · Datadog · Sentry · Notion · Slack · Discord · Twilio · Shopify · Vercel · Supabase · …
 
 </td>
@@ -775,7 +775,7 @@ done
 </details>
 
 <details>
-<summary><b>📚 开发者文档搜索 — 115 个平台 (Stripe / OpenAI / Anthropic / AWS / TikTok / WhatsApp / Telegram / Meta / …)</b></summary>
+<summary><b>📚 开发者文档搜索 — 142 个平台 (Stripe / OpenAI / Anthropic / AWS / TikTok / WhatsApp / Telegram / Meta / …)</b></summary>
 
 直接搜开发者文档站点很痛苦 —— developers.facebook.com、
 platform.openai.com、docs.anthropic.com 等都是重型 React SPA,
@@ -813,7 +813,7 @@ agentsearch search "ad creation" -e fb_docs --depth 3 --json
 quickstart / tutorial / use_case / webhook / guide) /
 `product` (从 URL 推断) / `api_version` (`v21.0` / `v25.0`)。
 
-#### `dev_docs` —— 通用开发者文档搜索(115 平台)
+#### `dev_docs` —— 通用开发者文档搜索(142 平台)
 
 ```bash
 # 按预设 platform
@@ -837,16 +837,17 @@ agentsearch search "lambda" -e docs --platform aws --mode changelog
 agentsearch search "embeddings" -e docs --platform openai --depth 3 --json
 ```
 
-#### 预设平台清单 (115)
+#### 预设平台清单 (142)
 
 | 类目 | 别名 |
 |---|---|
 | **云 / 基础设施** | google-cloud / gcp · aws · azure / microsoft · docker · kubernetes / k8s · hashicorp / terraform · github · gitlab · cloudflare · vercel · netlify · fly · render |
 | **API / SaaS** | stripe · twilio · slack · discord · shopify · supabase · firebase · mongodb · redis · postgres / postgresql · mysql · elasticsearch |
 | **社交平台** | tiktok / tiktok-business / tiktok-marketing / tiktok-login · snap / snapchat / snap-marketing · twitter / x · pinterest · reddit · linkedin · youtube |
-| **即时通讯 / IM** 🆕 | whatsapp / whatsapp-business / whatsapp-cloud · telegram / telegram-bot · messenger · line · viber · wechat / wechat-pay · kakao · instagram · threads |
-| **Meta 系产品** 🆕 | meta · facebook · instagram · messenger · threads · whatsapp · *(另见 fb_docs 引擎,16 个子产品精细过滤)* |
-| **Google 系产品** 🆕 | google-cloud / gcp · firebase · google-ads · google-analytics · google-maps · google-pay · youtube · google-ai / gemini |
+| **即时通讯 / IM** | whatsapp / whatsapp-business / whatsapp-cloud · telegram / telegram-bot · messenger · line · viber · wechat / wechat-pay · kakao · instagram · threads |
+| **Meta 系产品** | meta · facebook · instagram · messenger · threads · whatsapp · *(另见 fb_docs 引擎,16 个子产品精细过滤)* |
+| **Google 系产品** | google-cloud / gcp · firebase · google-ads · google-analytics · google-maps · google-pay · youtube · google-ai / gemini |
+| **移动分析 / 归因 / 广告情报** 🆕 | data.ai / appannie · sensortower · appsflyer · appsflyer-performance-index · appsflyer-benchmarks · adjust · branch · applovin / applovin-max · bigspy · similarweb · admiral / getadmiral · businessofapps · qimai / 七麦 · diandian / 点点数据 |
 | **AI / ML** | openai · anthropic / claude · huggingface / hf · cohere · pinecone · google-ai / gemini · langchain · llamaindex |
 | **前端 / 语言** | mdn / mozilla · react · vue · angular · svelte · nextjs / next · remix · nuxt · nodejs / node · deno · bun · python · typescript · rust · go / golang |
 | **移动端** | android · apple / ios · swift · flutter · react-native · expo |
