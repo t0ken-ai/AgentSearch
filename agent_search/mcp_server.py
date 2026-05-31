@@ -234,6 +234,7 @@ async def search(
     limit: int = 10,
     depth: int = 0,
     engine_options: dict[str, Any] | None = None,
+    fallback: bool = False,
 ) -> dict[str, Any]:
     """Search the live web through one of 80+ stealth-browser engines.
 
@@ -297,6 +298,18 @@ async def search(
                 ``{"category": "cs.AI", "sort_by": "submittedDate"}``
 
             For engines that don't accept extras, leave it empty.
+        fallback: When True and the query yields zero results (or the
+            engine raises), automatically retry through a health-aware
+            fallback chain (DuckDuckGo → Google → Bing → Brave →
+            Startpage → Qwant → Ecosia, reordered by recent reliability).
+            The user's chosen ``engine`` is *always* tried first.
+            The response includes ``fallback_used: bool`` and
+            ``attempts: list[{engine, ok, count, ms, error?}]`` for
+            transparency. Default False (single-engine behaviour).
+            Note: ``fallback`` is incompatible with ``engine_options``
+            (the chain engines don't share kwargs); when both are
+            given, ``engine_options`` is honored on the primary attempt
+            only and stripped from any fallback attempt.
 
     Returns:
         A dict with ``engine``, ``query``, ``count``, and ``results`` —
@@ -305,6 +318,8 @@ async def search(
         ``arxiv_id``, ``imdb_rating``, ``price``, ``doc_section``,
         ``platform``, ``ad_archive_id``). When ``depth > 0``, the
         first N results also have ``body_markdown`` / ``body_word_count``.
+        When ``fallback=True``, also includes ``fallback_used: bool``
+        and ``attempts: list[dict]``.
     """
     limit = max(1, min(limit, 50))
     depth = max(0, min(depth, limit))
@@ -379,20 +394,77 @@ async def search(
         raw = await _to_browser_thread(_run)
     except Exception as e:
         log.exception("[mcp] search failed: %s", e)
+        if not fallback:
+            return {
+                "engine": engine,
+                "query": query,
+                "error": f"{type(e).__name__}: {e}",
+                "count": 0,
+                "results": [],
+            }
+        # Fall through to fallback path with raw=[] so we still try
+        # the chain. Record the primary's failure for the agent.
+        primary_error = f"{type(e).__name__}: {e}"
+        raw = []
+    else:
+        primary_error = None
+
+    results = [r.__dict__ for r in raw]
+
+    # Fallback path — primary either errored or returned zero results.
+    # Walk down a health-aware chain. Note: the chain runs on its own
+    # browsers (one per fallback attempt) via health.search_with_fallback,
+    # so we route through asyncio.to_thread (it's self-contained — no
+    # touching of _pool's browser).
+    if fallback and not results:
+        from .health import search_with_fallback
+
+        def _run_fallback() -> dict[str, Any]:
+            return search_with_fallback(
+                query, primary=engine, limit=limit, headless=HEADLESS,
+            )
+
+        try:
+            fb = await asyncio.to_thread(_run_fallback)
+        except Exception as e:
+            log.exception("[mcp] fallback chain failed: %s", e)
+            fb = {
+                "query": query, "engine": None, "results": [],
+                "attempts": [], "fallback": True,
+                "error": f"{type(e).__name__}: {e}",
+            }
+
+        # If a fallback engine produced results, use those.
+        if fb.get("results"):
+            return {
+                "engine": fb.get("engine") or engine,
+                "query": query,
+                "count": len(fb["results"]),
+                "results": fb["results"],
+                "fallback_used": True,
+                "primary_engine": engine,
+                "primary_error": primary_error,
+                "attempts": fb.get("attempts", []),
+            }
+        # Whole chain empty.
         return {
             "engine": engine,
             "query": query,
-            "error": f"{type(e).__name__}: {e}",
             "count": 0,
             "results": [],
+            "fallback_used": True,
+            "primary_engine": engine,
+            "primary_error": primary_error,
+            "attempts": fb.get("attempts", []),
+            "error": fb.get("error") or "all fallback engines returned 0 results",
         }
 
-    results = [r.__dict__ for r in raw]
     return {
         "engine": engine,
         "query": query,
         "count": len(results),
         "results": results,
+        **({"fallback_used": False} if fallback else {}),
     }
 
 
@@ -620,23 +692,39 @@ async def find_competitor_ads(
     precise: bool = False,
     proxy_url: str | None = None,
 ) -> dict[str, Any]:
-    """End-to-end competitor ad research from an App Store URL.
+    """End-to-end competitor ad research from an App Store URL **or website**.
 
     Pipeline::
 
-        App URL  →  app metadata (developer, website domain)
-                 →  fan-out to ad libraries:
+        Input  →  app metadata (developer, website domain) — when input
+                  resolves as an app
+                  ─ OR ─
+                  synthetic meta from the domain — when input is a
+                  website / bare domain
+               →  fan-out to ad libraries:
                       * Meta / Instagram   (query=developer name)
                       * Google ATC         (mode=domain, domain=…)
                       * TikTok CC          (keyword=developer name)
-                 →  merged AdRecord stream
+               →  merged AdRecord stream
 
-    Use this when you have a competitor's app and want to know what
-    ads they're running across the major paid platforms in one shot.
+    Use this when you have a competitor's app **or website** and want
+    to know what ads they're running across the major paid platforms
+    in one shot.
 
     Args:
-        app_url: App Store URL or bare id (same accepted formats as
-            ``lookup_app``).
+        app_url: Any of:
+              * App Store URL — ``https://apps.apple.com/.../id<NUM>``
+              * Google Play URL — ``https://play.google.com/store/apps/details?id=<PKG>``
+              * Bare numeric id (Apple) — ``1234567890``
+              * Bare package id (Google Play) — ``com.foo.bar``
+              * **Website URL** — ``https://shopify.com``
+              * **Bare domain** — ``shopify.com``
+            When the input resolves as an app, full app metadata is
+            used; otherwise the domain is extracted and a synthetic
+            "meta" is built (brand name = domain's second-level label,
+            e.g. ``shopify.com → "Shopify"``). Domain-only input still
+            queries all four platforms — Meta/IG/TikTok by brand
+            keyword, Google ATC by domain.
         platforms: Subset of ``["meta", "instagram", "google", "tiktok"]``.
             Default = all four.
         limit_per_platform: Max ads per platform (default 10).
@@ -653,10 +741,12 @@ async def find_competitor_ads(
 
     Returns:
         ``{"app", "platforms_queried", "totals": {<platform>: count},
-           "ads": [<AdRecord>, ...], "errors": {<platform>: msg}}``
+           "ads": [<AdRecord>, ...], "errors": {<platform>: msg},
+           "input_kind": "app" | "domain"}``
     """
     from .engines._app_store import lookup_app as _lookup_app
     from .engines._ad_base import to_ad_record
+    from urllib.parse import urlparse
 
     proxy = proxy_url or _resolve_default_proxy()
     proxies = ({"https": proxy, "http": proxy}) if proxy else None
@@ -664,19 +754,116 @@ async def find_competitor_ads(
     plats = [p.lower() for p in (
         platforms or ["meta", "instagram", "google", "tiktok"])]
 
+    def _extract_domain(s: str) -> str | None:
+        """Pull a clean ``host.tld`` out of an input string, if any.
+
+        Used as the fallback path when the input doesn't resolve as
+        an App Store URL — we still want to query Google ATC + brand-
+        keyword Meta/IG/TikTok against ``shopify.com``-style inputs.
+        """
+        s = (s or "").strip().lower()
+        if not s:
+            return None
+        if s.startswith(("http://", "https://")):
+            try:
+                host = (urlparse(s).netloc or "").split(":")[0]
+                if host.startswith("www."):
+                    host = host[4:]
+                if "." in host:
+                    return host
+            except Exception:
+                return None
+        # Bare-token form: must look like a domain (has a dot, no slash,
+        # no whitespace) and must NOT look like a Google Play package id
+        # (com.X.Y / io.X / etc.)
+        if "/" in s or " " in s or "." not in s:
+            return None
+        parts = s.split(".")
+        if len(parts) >= 3 and parts[0] in (
+            "com", "io", "net", "org", "app", "co", "ai", "dev",
+        ):
+            return None  # looks like a package id
+        if s.replace(".", "").isdigit():
+            return None  # bare ip-ish or numeric
+        return s
+
+    def _synthetic_meta_for_domain(domain: str):
+        """Build a minimal meta-shaped object from a bare domain.
+
+        We borrow the brand name from the domain's second-level label
+        (``shopify.com → "Shopify"``). Quality is best-effort — the
+        agent gets the same return shape as the app path, with
+        ``store="website"`` so callers can tell which path served them.
+        """
+        brand = domain.split(".")[0].replace("-", " ").title()
+
+        class _DomainMeta:
+            title = brand
+            developer_name = brand
+            domain = None  # set below
+            website = None
+            store = "website"
+            app_id = None
+            bundle_id = None
+            rating = None
+            rating_count = None
+
+            def to_dict(self):
+                return {
+                    "title": self.title,
+                    "developer_name": self.developer_name,
+                    "domain": self.domain,
+                    "website": self.website,
+                    "store": self.store,
+                    "app_id": self.app_id,
+                    "bundle_id": self.bundle_id,
+                }
+
+        m = _DomainMeta()
+        m.domain = domain
+        m.website = f"https://{domain}"
+        m.app_id = domain
+        m.bundle_id = domain
+        return m
+
     def _run() -> dict[str, Any]:
-        meta = _lookup_app(app_url, proxies=proxies, country=country.lower())
+        input_kind = "app"
+        meta = None
+        try:
+            meta = _lookup_app(
+                app_url, proxies=proxies, country=country.lower(),
+            )
+        except Exception as e:
+            log.debug("[mcp] lookup_app raised on %s: %s", app_url, e)
+
         if not meta:
-            return {
-                "app_url": app_url,
-                "error": "could not resolve app — pass a real store URL or id",
-                "ads": [],
-            }
+            # Domain fallback: synthesize a meta from the input string.
+            domain = _extract_domain(app_url)
+            if domain:
+                log.info(
+                    "[mcp] %s did not resolve as an app — "
+                    "falling back to domain mode (%s)",
+                    app_url, domain,
+                )
+                meta = _synthetic_meta_for_domain(domain)
+                input_kind = "domain"
+            else:
+                return {
+                    "app_url": app_url,
+                    "error": (
+                        "could not resolve. Pass an App Store URL, a "
+                        "bare app id, a website URL, or a bare domain."
+                    ),
+                    "ads": [],
+                    "input_kind": "unknown",
+                }
+
         if not meta.developer_name and not meta.domain:
             return {
                 "app": meta.to_dict(),
-                "error": "app has no developer_name or domain — nothing to query",
+                "error": "no developer_name or domain available — nothing to query",
                 "ads": [],
+                "input_kind": input_kind,
             }
 
         ads: list[dict[str, Any]] = []
@@ -778,6 +965,7 @@ async def find_competitor_ads(
             "totals": totals,
             "ads": ads,
             "errors": errors,
+            "input_kind": input_kind,
         }
 
     try:
@@ -788,6 +976,7 @@ async def find_competitor_ads(
             "app_url": app_url,
             "error": f"{type(e).__name__}: {e}",
             "ads": [],
+            "input_kind": "unknown",
         }
 
 
@@ -1196,6 +1385,929 @@ async def extract_many(
         "elapsed_s": round(_time.time() - started, 1),
         "results": ordered,
     }
+
+
+# ---------------------------------------------------------------------------
+# Multi-engine fan-out
+# ---------------------------------------------------------------------------
+
+
+@mcp.tool()
+async def search_many(
+    query: str,
+    engines: list[str],
+    limit: int = 5,
+    timeout_s: int = 90,
+    max_workers: int | None = None,
+) -> dict[str, Any]:
+    """Run multiple search engines in parallel and merge their results.
+
+    Use this when the agent wants cross-source coverage — e.g.
+    ``["google", "duckduckgo", "bing"]`` to compare general-web hits,
+    or ``["github", "stackoverflow", "hackernews"]`` for code/dev
+    consensus, or ``["arxiv", "huggingface", "semanticscholar"]`` for
+    research. Each engine runs in its own browser instance (necessary
+    for Playwright greenlet affinity), so total wall-clock ≈
+    ``max(per-engine time)`` instead of ``sum(per-engine time)``.
+
+    Note this runs *outside* the shared MCP browser pool — each engine
+    in ``engines`` launches a dedicated short-lived browser, so the
+    common ``search`` / ``extract`` tools can still serve other
+    requests in parallel without contention.
+
+    Args:
+        query: Search query string.
+        engines: List of engine handles, e.g.
+            ``["google", "duckduckgo", "bing", "brave"]``. Duplicates
+            are de-duped while preserving order.
+        limit: Per-engine result cap (default 5). The merged list can
+            contain up to ``len(engines) * limit`` URLs.
+        timeout_s: Hard deadline for the whole fan-out. Default 90s.
+        max_workers: Concurrent browser limit. Default ``min(len(engines), 8)``.
+
+    Returns:
+        ``{
+          "query":      str,
+          "engines":    [<requested engines>],
+          "per_engine": {<engine>: {"ok", "count", "results", "elapsed_s",
+                                     "error?"}},
+          "merged":     [...],   # URL-deduped, sorted by consensus + score
+          "elapsed_s":  float,
+          "successful": int      # how many engines returned >=1 result
+        }``
+        Each merged result carries an extra ``engines`` list naming
+        every source that surfaced the URL — a useful consensus signal
+        for ranking.
+    """
+    from .multi import search_many as _search_many
+
+    if not engines:
+        return {
+            "query": query, "engines": [], "per_engine": {},
+            "merged": [], "elapsed_s": 0.0, "successful": 0,
+        }
+
+    limit = max(1, min(limit, 50))
+
+    def _run() -> dict[str, Any]:
+        return _search_many(
+            query, list(engines), limit=limit,
+            headless=HEADLESS, timeout_s=timeout_s,
+            max_workers=max_workers,
+        )
+
+    # Use asyncio.to_thread (NOT _to_browser_thread) — search_many launches
+    # its own per-engine browsers and is independent of _pool. Routing it
+    # through the dedicated worker would needlessly serialize it against
+    # the main browser.
+    try:
+        return await asyncio.to_thread(_run)
+    except Exception as e:
+        log.exception("[mcp] search_many failed: %s", e)
+        return {
+            "query": query, "engines": list(engines),
+            "per_engine": {}, "merged": [],
+            "elapsed_s": 0.0, "successful": 0,
+            "error": f"{type(e).__name__}: {e}",
+        }
+
+
+# ---------------------------------------------------------------------------
+# Engine health / status
+# ---------------------------------------------------------------------------
+
+
+@mcp.tool()
+async def engine_status(
+    engines: list[str] | None = None,
+    only_with_history: bool = False,
+) -> dict[str, Any]:
+    """Read the health log for one or more engines.
+
+    AgentSearch keeps a sliding window (last 50 attempts) of per-engine
+    success rate, average result count, average latency, and the
+    timestamp of the most recent attempt. Use this when the agent wants
+    to (a) decide whether an engine is currently usable before issuing
+    a costly call, or (b) report engine health back to the user.
+
+    The log is updated by every ``search(..., fallback=True)`` call —
+    so over time it builds an accurate picture of which engines work
+    reliably from the host's IP / proxy.
+
+    Args:
+        engines: Restrict to specific engine handles. ``None`` (default)
+            returns every engine that has at least one record (or every
+            registered engine when ``only_with_history`` is False).
+        only_with_history: When True, omit engines with zero attempts
+            (default False — engines with no history get neutral
+            placeholder stats so the agent can see they exist).
+
+    Returns:
+        ``{
+          "engines": [
+            {"engine":         str,
+             "attempts":       int,
+             "success_rate":   float | None,    # 0.0 to 1.0
+             "avg_results":    float | None,
+             "avg_ms":         int | None,
+             "last_attempt":   int | None,      # unix ts
+             "last_ok":        bool | None,
+             "score":          float},          # composite ranking score
+            ...
+          ],
+          "log_path": str
+        }``
+    """
+    from .health import HealthLog
+
+    def _run() -> dict[str, Any]:
+        h = HealthLog()
+        all_stats = h.all_stats()
+        wanted: set[str] | None = set(engines) if engines else None
+
+        out: list[dict[str, Any]] = []
+        for s in all_stats:
+            if wanted is not None and s["engine"] not in wanted:
+                continue
+            if only_with_history and s.get("attempts", 0) == 0:
+                continue
+            row = dict(s)
+            row["score"] = round(h.score(s["engine"]), 3)
+            out.append(row)
+
+        # If the caller named engines that have no history, surface them
+        # too (with placeholder stats) — unless only_with_history is on.
+        if wanted and not only_with_history:
+            seen = {r["engine"] for r in out}
+            for name in wanted:
+                if name in seen:
+                    continue
+                placeholder = h.stats(name)
+                placeholder["score"] = round(h.score(name), 3)
+                out.append(placeholder)
+
+        # Sort by score DESC, then engine name for stability.
+        out.sort(key=lambda r: (-(r.get("score") or 0), r.get("engine", "")))
+        return {"engines": out, "log_path": str(h.path)}
+
+    try:
+        return await asyncio.to_thread(_run)
+    except Exception as e:
+        log.exception("[mcp] engine_status failed: %s", e)
+        return {"engines": [], "error": f"{type(e).__name__}: {e}"}
+
+
+# ---------------------------------------------------------------------------
+# Screenshot
+# ---------------------------------------------------------------------------
+
+
+@mcp.tool()
+async def screenshot(
+    url: str,
+    full_page: bool = True,
+    selector: str | None = None,
+    format: str = "png",
+    quality: int = 80,
+    timeout_ms: int = 30000,
+    wait_for_selector: str | None = None,
+    wait_for_timeout_ms: int = 10000,
+) -> dict[str, Any]:
+    """Take a screenshot of a URL, return as base64-encoded image bytes.
+
+    Use this to feed a vision model the rendered appearance of a page,
+    debug SPA layouts, or generate report covers. Runs through the
+    same stealth Chromium as ``extract`` so JS-heavy SPAs render
+    correctly. When ``selector`` is provided, only that element is
+    captured (useful for charts / specific cards).
+
+    Args:
+        url: URL to screenshot. Must be http(s).
+        full_page: When True, capture the entire scrollable page
+            (auto-scrolls and stitches). Default True. Ignored when
+            ``selector`` is set.
+        selector: Optional CSS selector — when provided, only that
+            element is captured. Falls back to a full / viewport
+            screenshot when the selector isn't found.
+        format: ``"png"`` (lossless, larger) or ``"jpeg"`` (smaller,
+            lossy). Default png.
+        quality: JPEG quality 1-100 (ignored for png). Default 80.
+        timeout_ms: Navigation timeout. Default 30s.
+        wait_for_selector: Optional CSS selector to wait for before
+            capturing — same semantics as ``extract.wait_for_selector``.
+        wait_for_timeout_ms: Per-selector wait budget. Default 10s.
+
+    Returns:
+        ``{
+          "url":           str,    # final URL after redirects
+          "status":        "ok" | "error",
+          "format":        "png" | "jpeg",
+          "image_base64":  str,    # base64-encoded image bytes
+          "byte_size":     int,
+          "selector_used": str | None,
+          "selector_matched": bool,
+          "error?":        str
+        }``
+    """
+    import base64
+    fmt = (format or "png").lower()
+    if fmt not in ("png", "jpeg"):
+        return {
+            "url": url, "status": "error",
+            "error": f"invalid format {fmt!r}; choose 'png' or 'jpeg'",
+        }
+
+    def _run() -> dict[str, Any]:
+        page = _pool.page()
+        out: dict[str, Any] = {
+            "url": url, "status": "error",
+            "format": fmt,
+            "image_base64": "", "byte_size": 0,
+            "selector_used": selector,
+            "selector_matched": False,
+        }
+        try:
+            try:
+                page.goto(url, timeout=timeout_ms,
+                          wait_until="domcontentloaded")
+            except Exception as e:
+                out["error"] = f"navigation failed: {e}"
+                return out
+            try:
+                out["url"] = page.url
+            except Exception:
+                pass
+
+            if wait_for_selector:
+                try:
+                    page.wait_for_selector(
+                        wait_for_selector, timeout=wait_for_timeout_ms,
+                    )
+                except Exception:
+                    pass
+
+            screenshot_kwargs: dict[str, Any] = {"type": fmt}
+            if fmt == "jpeg":
+                screenshot_kwargs["quality"] = max(1, min(int(quality), 100))
+
+            data: bytes
+            if selector:
+                # Element screenshot — lower priority than full_page.
+                try:
+                    el = page.query_selector(selector)
+                    if el:
+                        data = el.screenshot(**screenshot_kwargs)
+                        out["selector_matched"] = True
+                    else:
+                        # Selector missed; gracefully fall back to viewport.
+                        screenshot_kwargs["full_page"] = full_page
+                        data = page.screenshot(**screenshot_kwargs)
+                        out["selector_matched"] = False
+                except Exception as e:
+                    log.debug("[mcp] selector screenshot failed: %s", e)
+                    screenshot_kwargs["full_page"] = full_page
+                    data = page.screenshot(**screenshot_kwargs)
+            else:
+                screenshot_kwargs["full_page"] = full_page
+                data = page.screenshot(**screenshot_kwargs)
+
+            out["byte_size"] = len(data)
+            out["image_base64"] = base64.b64encode(data).decode("ascii")
+            out["status"] = "ok"
+        except Exception as e:
+            out["error"] = f"{type(e).__name__}: {e}"
+        finally:
+            try:
+                page.close()
+            except Exception:
+                pass
+        return out
+
+    try:
+        return await _to_browser_thread(_run)
+    except Exception as e:
+        log.exception("[mcp] screenshot failed: %s", e)
+        return {
+            "url": url, "status": "error",
+            "format": fmt,
+            "error": f"{type(e).__name__}: {e}",
+        }
+
+
+# ---------------------------------------------------------------------------
+# Generic file / report downloader
+# ---------------------------------------------------------------------------
+
+
+@mcp.tool()
+async def download_files(
+    urls: list[str],
+    output_dir: str = "./downloads",
+    proxy_url: str | None = None,
+    max_workers: int = 4,
+    timeout: int = 30,
+    overwrite: bool = False,
+) -> dict[str, Any]:
+    """Bulk-download a list of URLs to a local directory.
+
+    The general-purpose counterpart to ``download_ad_media``: feed it
+    any list of ``http(s)://`` URLs (PDF reports, CSV exports, images,
+    archived HTML — whatever) and they'll be fetched in parallel
+    through the configured proxy with retries + timeout. Filenames are
+    derived from the URL path; collisions get a numeric suffix.
+
+    Use this for bulk-downloading benchmark PDFs after a search /
+    extract pass, or harvesting a list of competitor screenshots.
+
+    Args:
+        urls: List of HTTP(S) URLs to download. Anything else (mailto:,
+            javascript:, chrome://) is rejected per-URL.
+        output_dir: Local directory. Created if missing.
+        proxy_url: Optional ``http(s)://[user:pass@]host:port``. Falls
+            back to ``FLUXISP_PROXY`` / ``HTTPS_PROXY`` / ``HTTP_PROXY``
+            env vars (in that priority order).
+        max_workers: Concurrent downloads (default 4).
+        timeout: Per-download timeout in seconds (default 30).
+        overwrite: When False (default), skip URLs whose filename
+            already exists in ``output_dir``. When True, re-download
+            and replace.
+
+    Returns:
+        ``{
+          "output_dir": str,
+          "total":      int,
+          "succeeded":  int,
+          "failed":     int,
+          "skipped":    int,
+          "bytes":      int,
+          "files": [
+            {"url", "local_path", "success", "error",
+             "file_size", "content_type", "skipped": bool},
+            ...
+          ]
+        }``
+    """
+    import os as _os
+    from urllib.parse import urlparse, unquote
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+
+    eff_proxy = (
+        proxy_url
+        or os.environ.get("FLUXISP_PROXY")
+        or os.environ.get("HTTPS_PROXY")
+        or os.environ.get("HTTP_PROXY")
+    )
+
+    # Validate + uniquify destination filenames.
+    plan: list[tuple[int, str, str]] = []   # (idx, url, dest_path)
+    invalid: dict[int, dict[str, Any]] = {}
+    used_names: dict[str, int] = {}
+    abs_outdir = _os.path.abspath(output_dir)
+    _os.makedirs(abs_outdir, exist_ok=True)
+
+    def _safe_name(u: str) -> str:
+        try:
+            path = urlparse(u).path or "/"
+            name = unquote(_os.path.basename(path)) or "file"
+        except Exception:
+            name = "file"
+        # Prevent path traversal / weird chars.
+        name = name.replace("/", "_").replace("\\", "_")
+        if not name or name in (".", ".."):
+            name = "file"
+        # Cap length.
+        if len(name) > 180:
+            stem, dot, ext = name.rpartition(".")
+            if dot and len(ext) <= 8:
+                name = stem[:180 - len(ext) - 1] + "." + ext
+            else:
+                name = name[:180]
+        return name
+
+    for i, u in enumerate(urls or []):
+        u = (u or "").strip()
+        if not u or not u.lower().startswith(("http://", "https://")):
+            invalid[i] = {
+                "url": u, "local_path": "", "success": False,
+                "error": "must start with http:// or https://",
+                "file_size": 0, "content_type": "", "skipped": False,
+            }
+            continue
+        base = _safe_name(u)
+        # De-collide
+        n = used_names.get(base, 0)
+        used_names[base] = n + 1
+        dest_name = base if n == 0 else f"{base}.{n}"
+        plan.append((i, u, _os.path.join(abs_outdir, dest_name)))
+
+    def _download_one(url: str, dest: str) -> dict[str, Any]:
+        rec: dict[str, Any] = {
+            "url": url, "local_path": dest, "success": False,
+            "error": "", "file_size": 0, "content_type": "",
+            "skipped": False,
+        }
+        if not overwrite and _os.path.exists(dest):
+            try:
+                rec["file_size"] = _os.path.getsize(dest)
+            except Exception:
+                pass
+            rec["success"] = True
+            rec["skipped"] = True
+            return rec
+        try:
+            import requests
+            session = requests.Session()
+            if eff_proxy:
+                session.proxies.update({"http": eff_proxy, "https": eff_proxy})
+            session.headers.setdefault(
+                "user-agent",
+                "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+                "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/145.0.0.0 "
+                "Safari/537.36",
+            )
+            with session.get(url, timeout=timeout, stream=True,
+                             allow_redirects=True) as r:
+                r.raise_for_status()
+                rec["content_type"] = (r.headers.get("Content-Type") or "")
+                total = 0
+                with open(dest, "wb") as fh:
+                    for chunk in r.iter_content(64 * 1024):
+                        if chunk:
+                            fh.write(chunk)
+                            total += len(chunk)
+                rec["file_size"] = total
+            rec["success"] = True
+        except Exception as e:
+            rec["error"] = f"{type(e).__name__}: {e}"
+            # Best-effort cleanup of half-written file.
+            try:
+                if _os.path.exists(dest):
+                    _os.remove(dest)
+            except Exception:
+                pass
+        return rec
+
+    def _run() -> dict[int, dict[str, Any]]:
+        out: dict[int, dict[str, Any]] = {}
+        if not plan:
+            return out
+        workers = max(1, min(int(max_workers), 16, len(plan)))
+        with ThreadPoolExecutor(max_workers=workers) as ex:
+            fut_to_idx = {
+                ex.submit(_download_one, url, dest): i
+                for (i, url, dest) in plan
+            }
+            for fut in as_completed(fut_to_idx):
+                i = fut_to_idx[fut]
+                try:
+                    out[i] = fut.result()
+                except Exception as e:
+                    src_url = next(u for (idx, u, _d) in plan if idx == i)
+                    out[i] = {
+                        "url": src_url, "local_path": "",
+                        "success": False,
+                        "error": f"{type(e).__name__}: {e}",
+                        "file_size": 0, "content_type": "",
+                        "skipped": False,
+                    }
+        return out
+
+    try:
+        results = await asyncio.to_thread(_run)
+    except Exception as e:
+        log.exception("[mcp] download_files failed: %s", e)
+        return {
+            "output_dir": abs_outdir, "total": len(urls or []),
+            "succeeded": 0, "failed": len(urls or []), "skipped": 0,
+            "bytes": 0, "files": list(invalid.values()),
+            "error": f"{type(e).__name__}: {e}",
+        }
+
+    merged_dict = {**results, **invalid}
+    ordered = [merged_dict[i] for i in sorted(merged_dict.keys())]
+    succeeded = sum(1 for r in ordered if r.get("success"))
+    skipped = sum(1 for r in ordered if r.get("skipped"))
+    bytes_total = sum(r.get("file_size") or 0 for r in ordered if r.get("success"))
+    return {
+        "output_dir": abs_outdir,
+        "total": len(ordered),
+        "succeeded": succeeded,
+        "failed": len(ordered) - succeeded,
+        "skipped": skipped,
+        "bytes": bytes_total,
+        "files": ordered,
+    }
+
+
+# ---------------------------------------------------------------------------
+# News monitoring composite tool
+# ---------------------------------------------------------------------------
+
+
+@mcp.tool()
+async def summarise_news(
+    topic: str,
+    sources: list[str] | None = None,
+    limit_per_source: int = 5,
+    depth: int = 0,
+    timeout_s: int = 90,
+) -> dict[str, Any]:
+    """Cross-source news/topic monitoring in one call.
+
+    Composite tool: fan out a topic across several news / general
+    engines via ``search_many``, URL-dedupe, and (optionally) inline-
+    extract the body of the top hits via ``extract_page`` so the agent
+    can summarise the consensus picture in a single round-trip.
+
+    Default source set (``sources`` is None) is a cross-section of
+    Western news + general search + tech press:
+    ``["google", "duckduckgo", "bbc", "reuters", "techcrunch",
+       "verge", "arstechnica"]``.
+
+    Args:
+        topic: Free-text topic (e.g. ``"OpenAI o3 launch"``,
+            ``"AppsFlyer Q4 mobile app benchmarks"``).
+        sources: Engine handles to query in parallel. Default = the
+            mixed-news set above. Pass ``["bbc", "reuters", "guardian"]``
+            for hard-news only, ``["techcrunch", "verge", "arstechnica"]``
+            for tech press only, etc.
+        limit_per_source: Per-engine result cap (default 5).
+        depth: When > 0, also extract the body of the top N merged
+            results (post-dedupe). Each merged item gets
+            ``body_markdown`` / ``body_word_count``. Default 0 (titles +
+            snippets only).
+        timeout_s: Hard deadline for the whole pipeline. Default 90s.
+
+    Returns:
+        ``{
+          "topic":     str,
+          "sources":   [...],
+          "merged":    [...],          # URL-deduped, sorted by consensus
+          "per_source": {...},         # per-engine raw results
+          "extracted_count": int,
+          "elapsed_s": float
+        }``
+        ``merged`` carries the same shape as ``search_many.merged`` —
+        each item has an ``engines`` list naming every source that
+        surfaced the URL. With ``depth>0``, the top N items also have
+        ``body_markdown``.
+    """
+    from .multi import search_many as _search_many
+
+    if not topic or not topic.strip():
+        return {
+            "topic": topic, "sources": [], "merged": [],
+            "per_source": {}, "extracted_count": 0, "elapsed_s": 0.0,
+            "error": "topic must not be empty",
+        }
+    src_list = list(sources) if sources else [
+        "google", "duckduckgo", "bbc", "reuters",
+        "techcrunch", "verge", "arstechnica",
+    ]
+    limit_per_source = max(1, min(int(limit_per_source), 25))
+    depth = max(0, min(int(depth), 20))
+
+    import time as _time
+    started = _time.time()
+
+    def _run_search() -> dict[str, Any]:
+        return _search_many(
+            topic, src_list, limit=limit_per_source,
+            headless=HEADLESS, timeout_s=timeout_s,
+        )
+
+    try:
+        sm = await asyncio.to_thread(_run_search)
+    except Exception as e:
+        log.exception("[mcp] summarise_news search_many failed: %s", e)
+        return {
+            "topic": topic, "sources": src_list,
+            "merged": [], "per_source": {}, "extracted_count": 0,
+            "elapsed_s": round(_time.time() - started, 1),
+            "error": f"{type(e).__name__}: {e}",
+        }
+
+    merged: list[dict[str, Any]] = list(sm.get("merged") or [])
+    extracted = 0
+
+    # Inline-extract top N. extract_page goes through the shared pool,
+    # so this part is serial via _to_browser_thread.
+    if depth > 0 and merged:
+        def _extract_top():
+            count = 0
+            for item in merged[:depth]:
+                u = item.get("url") or ""
+                if not u:
+                    continue
+                page = _pool.page()
+                try:
+                    rec = extract_page(
+                        page, url=u, paginate=True, max_scrolls=2,
+                        include_links=False, include_images=False,
+                    )
+                    item["body_markdown"] = rec.get("content_markdown") or ""
+                    item["body_word_count"] = rec.get("word_count") or 0
+                    if rec.get("date") and not item.get("date"):
+                        item["date"] = rec["date"]
+                    count += 1
+                except Exception as e:
+                    item["body_error"] = f"{type(e).__name__}: {e}"
+                finally:
+                    try:
+                        page.close()
+                    except Exception:
+                        pass
+            return count
+
+        try:
+            extracted = await _to_browser_thread(_extract_top)
+        except Exception as e:
+            log.exception("[mcp] summarise_news extract phase failed: %s", e)
+
+    return {
+        "topic": topic,
+        "sources": src_list,
+        "merged": merged,
+        "per_source": sm.get("per_engine") or {},
+        "extracted_count": extracted,
+        "successful_engines": sm.get("successful", 0),
+        "elapsed_s": round(_time.time() - started, 1),
+    }
+
+
+# ---------------------------------------------------------------------------
+# Batch competitor-ad research
+# ---------------------------------------------------------------------------
+
+
+@mcp.tool()
+async def ads_batch(
+    app_urls: list[str],
+    platforms: list[str] | None = None,
+    limit_per_platform: int = 10,
+    country: str = "US",
+    precise: bool = False,
+    proxy_url: str | None = None,
+    output_dir: str | None = None,
+    include_ads: bool = False,
+) -> dict[str, Any]:
+    """Run ``find_competitor_ads`` against a list of App Store URLs.
+
+    Use this for "weekly competitor sweep" workflows — drop a list of
+    competitor app URLs in and get a consolidated cross-platform ad
+    report.
+
+    Note this tool serializes through the shared MCP browser pool
+    (Playwright greenlet affinity); for true parallel competitor
+    sweeps, run multiple MCP server instances behind a load balancer
+    or use the CLI ``agentsearch ads-batch`` with ``--workers N
+    --proxy-pool``.
+
+    Args:
+        app_urls: List of App Store URLs (Apple or Google Play),
+            bare ids, or website domains.
+        platforms: Subset of ``["meta", "instagram", "google", "tiktok"]``.
+            Default = all four. Same semantics as ``find_competitor_ads``.
+        limit_per_platform: Max ads per platform per app (default 10).
+        country: ISO country code (default ``US``).
+        precise: When True, run Meta's ``lookup_pages`` first so Meta /
+            Instagram queries hit a canonical page_id instead of a name
+            keyword. ~1 extra round-trip per app, much higher precision.
+        proxy_url: Optional outbound proxy. Falls back to
+            ``FLUXISP_PROXY`` / ``HTTPS_PROXY`` / ``HTTP_PROXY`` env vars.
+        output_dir: Optional local directory. When set, each app's
+            full ad payload is written to ``<output_dir>/<slug>.json``
+            and an index summary to ``<output_dir>/index.json`` —
+            useful for diffing weekly snapshots.
+        include_ads: When True, include the full per-app ad list in
+            the response. When False (default), only summaries are
+            returned (much smaller payload — recommended unless the
+            agent needs the raw ad records inline).
+
+    Returns:
+        ``{
+          "total_apps":       int,
+          "successful_apps":  int,
+          "failed_apps":      int,
+          "summaries": [
+            {"input", "slug", "title", "developer", "domain",
+             "store", "bundle_id",
+             "total_ads", "by_platform": {<plat>: int},
+             "json_file": str | null,    # when output_dir set
+             "elapsed_s": float,
+             "error?": str},
+            ...
+          ],
+          "ads_by_app":       {<slug>: [<ad>...]},   # only when include_ads=true
+          "output_dir":       str | None,
+          "elapsed_s":        float
+        }``
+    """
+    from .engines._app_store import lookup_app as _lookup_app
+    from .engines._ad_base import to_ad_record
+    import json as _json
+    import time as _time
+    import os as _os
+
+    eff_proxy = (
+        proxy_url or _resolve_default_proxy()
+    )
+    proxies = ({"https": eff_proxy, "http": eff_proxy}) if eff_proxy else None
+    plats = [p.lower() for p in (
+        platforms or ["meta", "instagram", "google", "tiktok"])]
+    limit = max(1, min(int(limit_per_platform), 50))
+
+    abs_outdir = None
+    if output_dir:
+        abs_outdir = _os.path.abspath(output_dir)
+        _os.makedirs(abs_outdir, exist_ok=True)
+
+    started = _time.time()
+    summaries: list[dict[str, Any]] = []
+    ads_by_app: dict[str, list[dict[str, Any]]] = {}
+
+    def _process_one(input_url: str) -> dict[str, Any]:
+        """Mirrors find_competitor_ads internals but against one app."""
+        app_started = _time.time()
+        try:
+            meta = _lookup_app(
+                input_url, proxies=proxies, country=country.lower(),
+            )
+        except Exception as e:
+            return {
+                "input": input_url,
+                "error": f"lookup_failed: {type(e).__name__}: {e}",
+                "elapsed_s": round(_time.time() - app_started, 1),
+            }
+        if not meta:
+            return {
+                "input": input_url, "error": "lookup_failed",
+                "elapsed_s": round(_time.time() - app_started, 1),
+            }
+        if not meta.developer_name and not meta.domain:
+            return {
+                "input": input_url,
+                "title": meta.title,
+                "store": meta.store,
+                "error": "no developer_name or domain available",
+                "elapsed_s": round(_time.time() - app_started, 1),
+            }
+
+        slug = (
+            (meta.bundle_id or "").replace(".", "_")
+            or f"{meta.store}_{meta.app_id}"
+        )
+
+        ads: list[dict[str, Any]] = []
+        by_platform: dict[str, int] = {}
+        errors: dict[str, str] = {}
+
+        def _query(engine_handle: str, kwargs: dict) -> list[Any]:
+            engine_cls = _get_engine(engine_handle)
+            page = _pool.page()
+            try:
+                inst = engine_cls(page)
+                return inst.search(
+                    kwargs.pop("query", ""), limit=limit, **kwargs,
+                ) or []
+            finally:
+                try:
+                    page.close()
+                except Exception:
+                    pass
+
+        # Meta
+        if "meta" in plats and meta.developer_name:
+            try:
+                rs = _query("meta_ad_library", {
+                    "query": meta.developer_name,
+                    "country": country,
+                })
+                for r in rs:
+                    ads.append(to_ad_record(r.__dict__).to_dict())
+                by_platform["meta"] = len(rs)
+            except Exception as e:
+                errors["meta"] = f"{type(e).__name__}: {e}"
+
+        # Instagram
+        if "instagram" in plats and meta.developer_name:
+            try:
+                rs = _query("instagram_ad_library", {
+                    "query": meta.developer_name,
+                    "country": country,
+                })
+                for r in rs:
+                    ads.append(to_ad_record(r.__dict__).to_dict())
+                by_platform["instagram"] = len(rs)
+            except Exception as e:
+                errors["instagram"] = f"{type(e).__name__}: {e}"
+
+        # Google ATC — domain mode
+        if "google" in plats and meta.domain:
+            try:
+                rs = _query("google_ad_transparency", {
+                    "query": meta.domain,
+                    "mode": "domain",
+                    "domain": meta.domain,
+                    "region": country,
+                })
+                for r in rs:
+                    ads.append(to_ad_record(r.__dict__).to_dict())
+                by_platform["google"] = len(rs)
+            except Exception as e:
+                errors["google"] = f"{type(e).__name__}: {e}"
+
+        # TikTok CC — keyword
+        if "tiktok" in plats and meta.developer_name:
+            try:
+                rs = _query("tiktok_creative_center", {
+                    "query": meta.developer_name,
+                    "mode": "top_ads",
+                    "country": country,
+                })
+                for r in rs:
+                    ads.append(to_ad_record(r.__dict__).to_dict())
+                by_platform["tiktok"] = len(rs)
+            except Exception as e:
+                errors["tiktok"] = f"{type(e).__name__}: {e}"
+
+        json_file = None
+        if abs_outdir:
+            payload = {
+                "input": input_url,
+                "app": meta.to_dict(),
+                "by_platform": by_platform,
+                "errors": errors,
+                "ads": ads,
+            }
+            json_file = f"{slug}.json"
+            with open(_os.path.join(abs_outdir, json_file),
+                      "w", encoding="utf-8") as fh:
+                _json.dump(payload, fh, indent=2, ensure_ascii=False)
+
+        ads_by_app[slug] = ads
+
+        return {
+            "input": input_url,
+            "slug": slug,
+            "title": meta.title,
+            "developer": meta.developer_name,
+            "domain": meta.domain,
+            "store": meta.store,
+            "bundle_id": meta.bundle_id,
+            "total_ads": len(ads),
+            "by_platform": by_platform,
+            "errors": errors,
+            "json_file": json_file,
+            "elapsed_s": round(_time.time() - app_started, 1),
+        }
+
+    def _run() -> list[dict[str, Any]]:
+        return [_process_one(u) for u in (app_urls or [])]
+
+    try:
+        summaries = await _to_browser_thread(_run)
+    except Exception as e:
+        log.exception("[mcp] ads_batch failed: %s", e)
+        return {
+            "total_apps": len(app_urls or []),
+            "successful_apps": 0,
+            "failed_apps": len(app_urls or []),
+            "summaries": [],
+            "output_dir": abs_outdir,
+            "elapsed_s": round(_time.time() - started, 1),
+            "error": f"{type(e).__name__}: {e}",
+        }
+
+    successful = sum(1 for s in summaries if not s.get("error"))
+
+    # Optional index file alongside the per-app JSONs.
+    if abs_outdir:
+        index_path = _os.path.join(abs_outdir, "index.json")
+        try:
+            with open(index_path, "w", encoding="utf-8") as fh:
+                _json.dump({
+                    "generated_at": _time.strftime(
+                        "%Y-%m-%dT%H:%M:%SZ", _time.gmtime()),
+                    "country": country,
+                    "platforms": plats,
+                    "precise": precise,
+                    "apps": summaries,
+                }, fh, indent=2, ensure_ascii=False)
+        except Exception as e:
+            log.warning("[mcp] ads_batch index write failed: %s", e)
+
+    out: dict[str, Any] = {
+        "total_apps": len(summaries),
+        "successful_apps": successful,
+        "failed_apps": len(summaries) - successful,
+        "summaries": summaries,
+        "output_dir": abs_outdir,
+        "elapsed_s": round(_time.time() - started, 1),
+    }
+    if include_ads:
+        out["ads_by_app"] = ads_by_app
+    return out
 
 
 # ----------------------------------------------------------------------- main
