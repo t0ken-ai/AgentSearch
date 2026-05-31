@@ -17,6 +17,13 @@ cloakbrowser>=0.3.31
 # Used by `agentsearch extract` for readability + Markdown extraction.
 trafilatura>=2.0
 
+# Used by `agentsearch extract` when the target URL serves a PDF
+# (Content-Type: application/pdf). Many MMP / ad-intel reports
+# (AppsFlyer, Adjust, Branch, businessofapps) ship as PDFs; without
+# this, trafilatura would consume binary bytes and return garbage.
+# pdfplumber is pure-Python and pulls in pdfminer.six transitively.
+pdfplumber>=0.11
+
 # ── Ad-library raw HTTP transport ──────────────────────────────────────
 # google_ad_transparency.GoogleAdTransparencyEngine.raw() needs requests
 # to bypass the cloakbrowser+stealth+proxy block on Google ATC.

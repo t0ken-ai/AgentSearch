@@ -41,6 +41,192 @@ except Exception as e:  # pragma: no cover
 DEFAULT_MAX_SCROLLS = 3
 
 
+# ---------------------------------------------------------------------------
+# PDF support
+# ---------------------------------------------------------------------------
+# Many MMP / ad-intel / vendor whitepapers (AppsFlyer Performance Index,
+# Adjust benchmarks, Branch reports, businessofapps deep-dives) ship as
+# PDFs rather than HTML. Routing PDF URLs through Playwright + trafilatura
+# returns garbage — Chromium opens its built-in PDF viewer and
+# ``page.content()`` returns the viewer's HTML wrapper, not the PDF
+# bytes. Instead, when we detect a PDF response, fetch the bytes via
+# requests and run them through ``pdfplumber``.
+
+try:
+    import pdfplumber  # type: ignore
+
+    _PDFPLUMBER_OK = True
+except Exception as e:  # pragma: no cover
+    log.debug("pdfplumber not available: %s", e)
+    pdfplumber = None  # type: ignore
+    _PDFPLUMBER_OK = False
+
+
+def _looks_like_pdf_url(url: str) -> bool:
+    """Cheap pre-check: does the URL path end with ``.pdf``?"""
+    if not url:
+        return False
+    try:
+        path = (urlparse(url).path or "").lower()
+    except Exception:
+        return False
+    return path.endswith(".pdf")
+
+
+def _detect_pdf_via_head(url: str, timeout: float = 8.0) -> tuple[bool, str]:
+    """HEAD probe to check ``Content-Type``.
+
+    Returns ``(is_pdf, content_type)``. ``is_pdf`` is True iff the
+    server returns ``application/pdf`` (with or without parameters).
+    Falls back to ``(False, "")`` on any error — callers can still
+    use the URL-extension heuristic.
+    """
+    try:
+        import requests  # late-imported
+        resp = requests.head(url, timeout=timeout, allow_redirects=True)
+        ct = (resp.headers.get("Content-Type") or "").lower()
+        return ct.startswith("application/pdf"), ct
+    except Exception as e:
+        log.debug("[extract] HEAD probe failed for %s: %s", url, e)
+        return False, ""
+
+
+def _extract_pdf(
+    url: str,
+    *,
+    timeout: float = 30.0,
+    max_pages: int = 200,
+) -> dict[str, Any]:
+    """Fetch a PDF and run text extraction via ``pdfplumber``.
+
+    Returns a dict with the same shape as :func:`extract_page` plus:
+
+      * ``pdf``: True
+      * ``page_count``: total pages in the PDF
+      * ``pages_extracted``: how many pages we processed (capped by ``max_pages``)
+      * ``extractor``: ``"pdfplumber"``
+
+    Tables get one Markdown pipe table per source ``<table>`` under a
+    ``## Tables (extracted)`` heading, mirroring the behavior of the
+    HTML path.
+    """
+    out: dict[str, Any] = {
+        "url": url,
+        "status": "error",
+        "title": "",
+        "author": "",
+        "date": "",
+        "language": "",
+        "description": "",
+        "content_markdown": "",
+        "content_text": "",
+        "word_count": 0,
+        "extractor": "pdfplumber",
+        "scrolls": 0,
+        "load_more_clicks": 0,
+        "selector_waited": "",
+        "selector_matched": False,
+        "challenge_detected": False,
+        "challenge_phrase": "",
+        "challenge_cleared": True,
+        "tables_extracted": 0,
+        "consent_clicked": [],
+        "consent_removed": 0,
+        "pdf": True,
+        "page_count": 0,
+        "pages_extracted": 0,
+    }
+    if not _PDFPLUMBER_OK:
+        out["error"] = (
+            "pdfplumber is not installed. Add 'pdfplumber>=0.11' to "
+            "requirements.txt or run "
+            "'pip install pdfplumber>=0.11'."
+        )
+        return out
+
+    import io
+    try:
+        import requests  # late-imported
+        resp = requests.get(url, timeout=timeout, stream=False)
+        resp.raise_for_status()
+        bio = io.BytesIO(resp.content)
+    except Exception as e:
+        out["error"] = f"PDF fetch failed: {type(e).__name__}: {e}"
+        return out
+
+    try:
+        with pdfplumber.open(bio) as pdf:  # type: ignore[union-attr]
+            out["page_count"] = len(pdf.pages)
+            text_chunks: list[str] = []
+            table_blocks: list[str] = []
+            pages_to_read = pdf.pages[:max_pages]
+            for p in pages_to_read:
+                try:
+                    t = p.extract_text() or ""
+                except Exception:
+                    t = ""
+                if t.strip():
+                    text_chunks.append(t.strip())
+                # Tables — pdfplumber returns list[list[list[str]]]
+                try:
+                    tables = p.extract_tables() or []
+                except Exception:
+                    tables = []
+                for tbl in tables:
+                    if not tbl or len(tbl) < 2:
+                        continue
+                    rows = [
+                        [(c or "").replace("|", "\\|").replace("\n", " ").strip()
+                         for c in row]
+                        for row in tbl
+                    ]
+                    ncols = max(len(r) for r in rows)
+                    if ncols < 2 or ncols > 12:
+                        continue
+                    rows = [r + [""] * (ncols - len(r)) for r in rows]
+                    header = rows[0]
+                    body = rows[1:]
+                    if not any(header):
+                        header = [f"Col {i+1}" for i in range(ncols)]
+                    table_blocks.append(
+                        "| " + " | ".join(header) + " |\n"
+                        + "| " + " | ".join(["---"] * ncols) + " |\n"
+                        + "\n".join(
+                            "| " + " | ".join(row) + " |"
+                            for row in body
+                        )
+                    )
+
+            out["pages_extracted"] = len(pages_to_read)
+            text = "\n\n".join(text_chunks)
+            md = text
+            if table_blocks:
+                md = (md or "") + (
+                    "\n\n## Tables (extracted)\n\n"
+                    + "\n\n".join(table_blocks)
+                )
+            out["content_text"] = text
+            out["content_markdown"] = md
+            out["word_count"] = _word_count(text)
+            out["tables_extracted"] = len(table_blocks)
+
+            try:
+                meta = pdf.metadata or {}
+                out["title"] = (meta.get("Title") or "").strip()
+                out["author"] = (meta.get("Author") or "").strip()
+                out["description"] = (meta.get("Subject") or "").strip()
+                out["date"] = str(meta.get("CreationDate") or "").strip()
+            except Exception:
+                pass
+
+            out["status"] = "ok" if text else "empty"
+    except Exception as e:
+        out["error"] = f"pdfplumber failed: {type(e).__name__}: {e}"
+        return out
+
+    return out
+
+
 # Phrases that appear in the document <title> when the page is showing
 # a Cloudflare / Akamai / DataDome / PerimeterX challenge interstitial
 # rather than the real site content.
@@ -646,7 +832,23 @@ def extract_page(
         "tables_extracted": 0,
         "consent_clicked": [],
         "consent_removed": 0,
+        "pdf": False,
     }
+
+    # PDF short-circuit. Chromium opens its built-in PDF viewer for
+    # application/pdf responses, and ``page.content()`` returns the
+    # viewer's HTML wrapper rather than the underlying PDF bytes — so
+    # trafilatura sees nothing useful. Detect the case up front (URL
+    # extension or HEAD probe) and route through pdfplumber via raw
+    # HTTP. Cheap: a HEAD probe is one round-trip and we skip it
+    # entirely when the URL doesn't end in .pdf.
+    if url:
+        is_pdf = _looks_like_pdf_url(url)
+        if not is_pdf:
+            is_pdf, _ct = _detect_pdf_via_head(url, timeout=8.0)
+        if is_pdf:
+            log.info("[extract] %s detected as PDF — routing via pdfplumber", url)
+            return _extract_pdf(url)
 
     if url:
         try:
