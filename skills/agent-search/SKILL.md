@@ -1,9 +1,9 @@
 ---
 name: agent-search
-description: Search the live web from 80 sites — Google, Bing, DuckDuckGo, YouTube, Reddit, GitHub, StackOverflow, Hacker News, arXiv, HuggingFace, Wikipedia, IMDB, Goodreads, Amazon, eBay, Pinterest, Unsplash, Apple Podcasts, Bilibili, Zhihu, Xiaohongshu, BBC, The Guardian, Reuters, AP News, CNN, NPR, Al Jazeera, TechCrunch, The Verge, Ars Technica and more — through a local stealth browser. Use this skill whenever the user wants to search the web, look up something online, find information on a specific site, research a topic, fetch up-to-date facts, browse a forum / video site / shopping site / academic site / news site, or get content the model's training data wouldn't know about. No API keys required, no rate limits, no third-party servers — every query runs in a Chromium on the user's machine. Prefer this skill over generic web_search whenever the user names a target site or wants results from a specific platform.
-version: 3.0.0
+description: Local stealth-browser toolkit for the live web — 80+ search engines (Google, Reddit, GitHub, YouTube, arXiv, Bilibili, Zhihu, …), 5 ad-library engines (Meta / Instagram / TikTok Creative Center / TikTok Ad Library / Google Ads Transparency), 2 developer-doc engines covering 142 platforms (Stripe / OpenAI / Anthropic / AWS / TikTok / WhatsApp / Telegram / AppsFlyer / Adjust / data.ai / 七麦 …), Apple App Store + Google Play search, and competitor-research workflows (App URL → ads on every platform). All running in a Chromium on the user's machine — no API keys, no rate limits, no third-party servers. Use this skill whenever the user wants to search the web, look up developer docs, research a competitor's app + ads + landing pages, scan an attribution / MMP / ad-intel portal, or fetch up-to-date facts the model's training data wouldn't know.
+version: 4.0.0
 metadata:
-  short-description: Free local web search across 80 sites — Google, YouTube, Reddit, GitHub, arXiv, Amazon, IMDB, BBC, Reuters, TechCrunch, Bilibili, Zhihu, etc.
+  short-description: 80+ search engines + 142 dev-docs platforms + 5 ad libraries + App Store search + competitor-ad research — all local, no API keys.
   keywords:
     - web search
     - search engine
@@ -23,448 +23,531 @@ metadata:
     - research
     - scrape
     - browse
+    - developer documentation
+    - api docs
+    - stripe docs
+    - openai docs
+    - anthropic docs
+    - aws docs
+    - whatsapp api
+    - telegram bot
+    - meta ad library
+    - facebook ad library
+    - tiktok ad library
+    - google ad transparency
+    - competitor ads
+    - app store
+    - google play
+    - apple app store
+    - appsflyer
+    - adjust
+    - sensor tower
+    - data.ai
+    - bigspy
+    - similarweb
     - 搜索
     - 查找
     - 搜
     - 新闻
+    - 七麦
+    - 点点数据
+    - 应用商店
+    - 广告情报
 ---
 
 # 🔍 AgentSearch Skill
 
-A local stealth-browser search toolkit that gives an AI agent live access to 71 websites
-across 15 categories — search engines, code/dev forums, academic papers, video sites,
-shopping, social, podcasts, images and Chinese platforms — all without API keys, all
-running on the user's machine through CloakBrowser (an anti-detection Chromium).
+A local stealth-browser toolkit that gives an AI agent live access to:
+
+- **80+ web search engines** across 16 categories (general, code, academic, social, video, news, shopping, Chinese, …)
+- **5 ad-library engines** for competitor ad research (Meta + Instagram + TikTok CC + TikTok Ad Library + Google ATC)
+- **2 developer-documentation engines** covering **142 platforms** (Stripe / OpenAI / Anthropic / AWS / TikTok / WhatsApp / Telegram / Meta / AppsFlyer / Adjust / data.ai / Sensor Tower / 七麦 / 点点数据 / …)
+- **Apple App Store + Google Play search** with 25+ metadata fields per app
+- **End-to-end workflows** — App Store URL → ads on every paid platform, ad-record list → bulk media download, search → markdown extract in one shot
+
+All running in CloakBrowser (anti-detection Chromium) on the user's machine — no API keys, no rate limits, no third-party servers, 100% privacy.
 
 ---
 
 ## When To Use This Skill
 
-Invoke this skill **whenever the user wants to retrieve content from the live web**.
-Trigger examples:
+Invoke this skill **whenever the user wants something from the live web**. Trigger examples:
 
-| User intent                                              | Use this skill? |
-|----------------------------------------------------------|:---------------:|
-| "Search Google for ..."                                  | ✅ → google     |
-| "What does Reddit say about X"                           | ✅ → reddit     |
-| "Find StackOverflow answers about Y"                     | ✅ → stackoverflow |
-| "Show me YouTube tutorials on Z"                         | ✅ → youtube    |
-| "Latest arXiv papers on transformers"                    | ✅ → arxiv      |
-| "Top HuggingFace models for image generation"            | ✅ → huggingface|
-| "What's on Hacker News today"                            | ✅ → hackernews |
-| "B站搜下 Python 教程"                                     | ✅ → bilibili   |
-| "知乎上对 X 的看法"                                       | ✅ → zhihu      |
-| "Search a thing on the internet"                         | ✅ → google or duckduckgo |
-| "Look up a Wikipedia article on …"                       | ✅ → wikipedia  |
-| "Find a book on Goodreads"                               | ✅ → goodreads  |
-| "Find a movie on IMDB"                                   | ✅ → imdb       |
-| "Check Amazon / eBay prices for …"                       | ✅ → amazon / ebay |
-| "Find a Pinterest board on …"                            | ✅ → pinterest  |
+| User intent | Tool / Engine |
+|---|---|
+| "Search Google for …" | `search` engine=google |
+| "What does Reddit say about X" | `search` engine=reddit |
+| "Find StackOverflow answers about Y" | `search` engine=stackoverflow |
+| "Show me YouTube tutorials on Z" | `search` engine=youtube |
+| "Latest arXiv papers on transformers" | `search` engine=arxiv |
+| "B站搜下 Python 教程" | `search` engine=bilibili |
+| "知乎上对 X 的看法" | `search` engine=zhihu |
+| **"Look up Stripe webhook docs"** | `search` engine=dev_docs platform=stripe |
+| **"OpenAI embeddings reference"** | `search` engine=dev_docs platform=openai mode=reference |
+| **"WhatsApp Business send-message API"** | `search` engine=dev_docs platform=whatsapp |
+| **"AppsFlyer SDK iOS integration"** | `search` engine=dev_docs platform=appsflyer |
+| **"七麦 关键词监控 API"** | `search` engine=dev_docs platform=qimai |
+| **"Find Shopify's Facebook ads"** | `search` engine=meta_ad_library + advertiser_contains filter |
+| **"What ads is Wish running on TikTok?"** | `search` engine=tiktok_creative_center mode=top_ads |
+| **"Google ads from shopify.com"** | `search` engine=google_ad_transparency mode=domain domain=shopify.com |
+| **"What competitor ads does this app run?"** | `find_competitor_ads` app_url=… |
+| **"Search Shopify on Apple App Store"** | `search_app` query=shopify store=apple |
+| **"Get me the metadata for this iOS app"** | `lookup_app` app_url=… |
+| **"Read the top 5 articles about X"** | `search` then `extract_many` urls=[…] |
 
 **Prefer this skill over a built-in `web_search` tool** when:
-- The user named a specific site (Reddit, GitHub, YouTube, arXiv, etc).
-- The user asks about content that needs a JS-rendered SPA (YouTube, Bilibili, Pinterest, etc).
-- The user wants results from a non-English region (Bilibili, Zhihu, Baidu, Sogou).
-- The user wants long-form content (Reddit threads, Medium articles, arXiv abstracts).
-- The user values privacy and explicitly asks for local-only execution.
+- The user named a specific site / portal / vendor (Reddit, GitHub, YouTube, Stripe docs, Meta ad library, Apple App Store, AppsFlyer, …)
+- The user is doing competitor research (ads, app metadata, landing pages, dev portal scans)
+- The user wants up-to-date docs the model's training cutoff missed
+- The user values privacy / local-only execution
+- The user wants a JS-rendered SPA (YouTube, Bilibili, Pinterest, Reddit redesign, all ad-library SPAs)
 
 ---
 
-## The 71 Engines
+## 🔌 MCP Server Mode (recommended for AI hosts)
 
-Always pick the engine that matches the user's intent. If you're not sure, fall back to
-`google`, `duckduckgo` or `bing`.
+AgentSearch ships an MCP server exposing **9 tools**. Configure once in Kiro / Claude Desktop / Cursor / Cline / Continue, then call directly.
 
-| Category | Engines |
-|----------|---------|
-| **General search** | `google`, `bing`, `duckduckgo`, `brave`, `yandex`, `startpage`, `ecosia`, `qwant` |
-| **Chinese search** | `baidu`, `sogou`, `so360` |
-| **Code / dev** | `github` (`github_search`), `stackoverflow`, `hackernews`, `npm` (`npm_search`), `devto` |
-| **AI / research** | `huggingface`, `arxiv` |
-| **Knowledge** | `wikipedia`, `wikivoyage`, `pubmed`, `wolfram` |
-| **Forums / community** | `reddit`, `reddit_subreddit`, `quora`, `blackhatworld`, `producthunt` |
-| **Social — global** | `twitter`, `instagram` |
-| **Social — Chinese** | `zhihu`, `weibo`, `xiaohongshu`, `douyin`, `toutiao`, `bilibili` |
-| **Western news** | `bbc`, `guardian`, `reuters`, `apnews`, `cnn`, `npr`, `aljazeera`, `techcrunch`, `verge`, `arstechnica` |
-| **Video / streaming** | `youtube`, `twitch`, `netflix`, `tiktok` |
-| **Audio / podcasts** | `spotify`, `soundcloud`, `apple_podcasts`, `xiaoyuzhou` |
-| **Movies & books** | `imdb`, `goodreads` |
-| **News / content** | `medium` |
-| **E-commerce** | `amazon`, `ebay`, `icecat`, `steam` |
-| **Jobs & local** | `linkedin_jobs`, `indeed`, `yelp` |
-| **Patents & security** | `google_patents`, `virustotal` |
-| **Archive & files** | `archive_org`, `torrent_1337x` |
-| **Images** | `unsplash`, `pixabay`, `pexels`, `pinterest` |
-
----
-
-## Quick Recipes
-
-Every recipe assumes the venv is activated:
-
-```bash
-source ~/tools/cloakbrowser/venv/bin/activate
-cd ~/projects/AgentSearch
-```
-
-### Recipe 1 — Generic web search
-```bash
-agentsearch search "what the user asked" --engine google --limit 5 --json
-```
-Returns JSON with `title`, `url`, `snippet` for each hit. Pick `duckduckgo` if Google
-shows a CAPTCHA.
-
-### Recipe 2 — Code / docs lookup
-```bash
-agentsearch search "TypeError pandas dataframe groupby" --engine stackoverflow --limit 5 --json
-agentsearch search "kubernetes ingress controller" --engine github --limit 5 --json
-```
-
-### Recipe 3 — Latest research
-```bash
-agentsearch search "transformer scaling laws" --engine arxiv --limit 5 --json
-agentsearch search "llama text-generation" --engine huggingface --limit 5 --json
-```
-
-### Recipe 4 — Discussion / opinions
-```bash
-agentsearch search "best linux laptop 2025" --engine reddit --limit 5 --json
-agentsearch search "Python" --engine reddit_subreddit --limit 5 --json   # r/Python hot posts
-agentsearch search "what is consciousness" --engine quora --limit 5 --json
-```
-
-### Recipe 5 — Video / how-to
-```bash
-agentsearch search "react hooks tutorial" --engine youtube --limit 10 --json
-agentsearch search "Python 入门" --engine bilibili --limit 5 --json
-```
-
-### Recipe 6 — Shopping
-```bash
-agentsearch search "mechanical keyboard hotswap" --engine amazon --limit 5 --json
-agentsearch search "vintage hi-fi tube amp" --engine ebay --limit 5 --json
-```
-
-### Recipe 7 — Chinese platforms
-```bash
-agentsearch search "机器学习" --engine zhihu --limit 5 --json
-agentsearch search "旅行攻略" --engine xiaohongshu --limit 5 --json
-agentsearch search "美食" --engine douyin --limit 5 --json
-```
-
-### Recipe 8 — Movie / book / podcast
-```bash
-agentsearch search "Inception" --engine imdb --limit 5 --json
-agentsearch search "Dune" --engine goodreads --limit 5 --json
-agentsearch search "Lex Fridman" --engine apple_podcasts --limit 5 --json
-```
-
-### Recipe 9 — Images
-```bash
-agentsearch search "mountain landscape" --engine unsplash --limit 5 --json
-agentsearch search "interior design" --engine pinterest --limit 5 --json
-```
-
-### Recipe 10 — Extract one URL's content (readability + Markdown)
-```bash
-# Returns clean Markdown body + structured metadata (title, author, date,
-# language, description, word_count, links, images). Auto-scrolls and
-# clicks "Load more" buttons to surface lazy content.
-agentsearch extract "https://example.com/article" --json
-agentsearch extract "https://reddit.com/r/foo/comments/x" --json --no-images
-```
-
-JSON output schema:
-
-```json
-{
-  "url": "...", "status": "ok",
-  "title": "...", "author": "...", "date": "2025-05-09",
-  "description": "...", "language": "en",
-  "content_markdown": "...", "content_text": "...",
-  "word_count": 7936, "extractor": "trafilatura",
-  "scrolls": 1, "load_more_clicks": 0,
-  "links": [{"text": "...", "url": "..."}],
-  "images": [{"src": "...", "alt": "..."}]
-}
-```
-
-### Recipe 11 — List every available engine
-```bash
-agentsearch list-engines
-```
-
-### Recipe 12 — Multi-engine fan-out (parallel)
-```bash
-# Run 3-5 engines concurrently and merge results by URL with consensus
-# signal (URLs surfaced by multiple engines float to top). 2-3× faster
-# than sequential calls.
-agentsearch search-many "open-source MCP web search" \
-    --engines duckduckgo,hackernews,github --limit 5 --merged --json
-```
-
-### Recipe 13 — Search with deep-fetch (one-shot SERP + body)
-```bash
-# Returns SERP hits AND the readability-extracted markdown body of the
-# top N results, so the agent doesn't need follow-up `extract` calls.
-agentsearch search "transformer scaling laws" \
-    --engine arxiv --limit 5 --depth 3 --json
-# Top 3 results get body_markdown + body_word_count fields.
-```
-
-### Recipe 14 — Search with health-aware auto-fallback
-```bash
-# Try primary engine; on empty / error, walk down a health-ranked chain
-# of general-search engines. Engine health is tracked across calls in
-# ~/.cache/agentsearch/health.json.
-agentsearch search "X" --engine google --fallback --json
-
-# Custom fallback chain
-agentsearch search "X" --engine google \
-    --fallback --fallback-chain duckduckgo,bing,startpage --json
-
-# Inspect the local health table
-agentsearch status
-```
-
-### Recipe 15 — Log into a site once, reuse the session forever
-```bash
-# Open a headed CloakBrowser at the site's login page. Log in normally,
-# then come back to the terminal and press Enter. Cookies are saved to
-# ~/.cache/agentsearch/profiles/<site>/. Stealth (CloakBrowser's C++
-# patches) still applies — strictly better than driving your real Chrome.
-agentsearch login twitter
-agentsearch login linkedin
-agentsearch login glassdoor      # custom site → pass --url
-agentsearch login mysite --url https://mysite.com/auth/signin
-
-# Use the saved session in any follow-up search/extract:
-agentsearch search "from:elonmusk AI" --engine twitter --profile twitter --limit 10
-agentsearch extract "https://www.linkedin.com/in/<someone>/" --profile linkedin --json
-
-# Profiles are keyed by --profile name (defaults to the site arg). Re-running
-# `agentsearch login <site>` reuses the existing profile (just refreshes session).
-```
-
-When to use this:
-
-| Site | Why |
-|---|---|
-| `twitter` / `x` | API gone; logged-in user gets full feed access |
-| `linkedin` | Profile pages require login since 2024 |
-| `glassdoor` | Reviews / salaries paywalled to logged-in users |
-| `instagram` / `facebook` | Most content requires login |
-| `discord` | Channels need account |
-| `medium` | Paywalled articles unlock for members |
-| `quora` | Full thread for logged-in users |
-| Any private SaaS | Notion / Linear / JIRA / company wikis |
-
----
-
-## 🔌 MCP Server Mode
-
-AgentSearch ships an MCP server that wraps the same engines as `search` /
-`extract` / `list_engines` tools, so any MCP-compatible host (Claude
-Desktop, Cursor, Cline, Continue, Roo Code, OpenClaw…) can call them
-directly. Each tool call shares one Chromium that recycles every 25
-calls (env: `AGENTSEARCH_RECYCLE_AFTER`).
-
-```bash
-# Start the server (stdio JSON-RPC)
-python -m agent_search.mcp_server
-```
-
-Tool catalog:
-
-| Tool | Args | Returns |
-|---|---|---|
-| `search` | `query, engine, limit, depth` | `{engine, query, count, results[]}` — when `depth>0`, top-N hits include `body_markdown` / `body_word_count` |
-| `extract` | `url, paginate, max_scrolls, include_links, include_images` | `{url, status, title, author, date, content_markdown, word_count, ...}` |
-| `list_engines` | (none) | `{count, engines[], categories{}}` |
-
-Sample Claude Desktop config (`~/Library/Application Support/Claude/claude_desktop_config.json`):
+### Configure (Kiro `.kiro/settings/mcp.json`)
 
 ```json
 {
   "mcpServers": {
     "agent-search": {
-      "command": "/path/to/venv/bin/python",
-      "args": ["-m", "agent_search.mcp_server"]
+      "command": "/Users/gao/tools/cloakbrowser/venv/bin/python",
+      "args": ["-m", "agent_search.mcp_server"],
+      "env": {
+        "AGENTSEARCH_HEADLESS": "1",
+        "FLUXISP_PROXY": "<optional residential proxy URL>"
+      }
     }
   }
 }
 ```
 
----
+### The 9 MCP tools
 
-## Output Format
+| Tool | Args | Purpose |
+|---|---|---|
+| **`search`** | `query, engine, limit, depth, engine_options` | Query any of 80+ engines; `engine_options` dict forwards engine-specific kwargs (platform / mode / country / page_id / sort / …); `depth>0` inlines markdown for top N hits |
+| **`extract`** | `url, paginate, max_scrolls, include_links, include_images` | Fetch one URL, return readability-extracted markdown + structured metadata |
+| **`extract_many`** | `urls[], paginate, max_scrolls, include_links, include_images` | Batch extract — preserves input order, validates URLs, returns one record per URL |
+| **`list_engines`** | (none) | Enumerate engines + categories + companion_tools + `engine_options_examples` |
+| **`list_dev_docs_platforms`** | `filter_substring?, category?` | Browse the 142 dev_docs presets by substring or category |
+| **`search_app`** | `query, store, country, limit, fast, with_contact, proxy_url` | Apple App Store + Google Play keyword search, 25+ metadata fields |
+| **`lookup_app`** | `app_url, country, proxy_url` | Single-app metadata from store URL or bare id |
+| **`find_competitor_ads`** | `app_url, platforms[], limit_per_platform, country, precise, proxy_url` | App URL → fan-out to Meta/IG/Google/TikTok ad libraries → merged ad stream |
+| **`download_ad_media`** | `records[], output_dir, proxy_url, max_per_record, max_workers, timeout` | Bulk-download every image / video URL from a list of ad-engine results |
 
-With `--json` every CLI command returns:
+### `engine_options` cheat-sheet (the killer feature)
 
-```json
-{
-  "engine": "google",
-  "query": "open source software",
-  "limit": 5,
-  "count": 5,
-  "results": [
-    {
-      "title": "Open-source software - Wikipedia",
-      "url": "https://en.wikipedia.org/wiki/Open-source_software",
-      "snippet": "Open-source software (OSS) is computer software …",
-      "score": null
-    }
-  ]
-}
+`engine_options` is a dict forwarded to `EngineClass.search()` so engine-specific parameters work through MCP:
+
+```jsonc
+// dev_docs — 142 preset platforms
+{"platform": "stripe"}                          // alias from list_dev_docs_platforms
+{"platform": "openai", "mode": "reference"}     // search / reference / changelog / api / tutorial / examples
+{"platform": "aws", "product": "lambda"}        // narrow with inurl:lambda
+{"platform": "react", "api_version": "18"}      // quote a literal version
+{"site": "docs.example.com"}                    // arbitrary host (when no preset)
+
+// fb_docs — Meta-only with 16 product slugs
+{"product": "marketing-api", "mode": "reference"}
+{"product": "whatsapp-business", "api_version": "v25.0"}
+
+// meta_ad_library / fb_ads
+{"country": "US", "active_status": "active", "ad_type": "all", "media_type": "video"}
+{"mode": "advertiser", "page_id": "20409006880"}     // canonical Facebook page id
+{"mode": "page_url", "page_url": "https://facebook.com/Shopify"}
+
+// google_ad_transparency / g_ads
+{"mode": "domain", "domain": "shopify.com", "region": "US"}
+{"mode": "search_advertisers", "region": "US"}
+{"mode": "advertiser_ads", "advertiser_id": "AR..."}
+
+// tiktok_creative_center / tt_ads
+{"mode": "top_ads", "country": "US", "industry": "ecommerce", "period": 30}
+
+// reddit / reddit_subreddit
+{"sort": "top", "time": "month"}
+
+// youtube
+{"upload_date": "this_week", "duration": "long", "sort_by": "view_count"}
+
+// github_search
+{"type": "code", "language": "python", "stars": ">100"}
+
+// arxiv
+{"category": "cs.AI", "sort_by": "submittedDate"}
 ```
 
-Engine-specific results include extra fields on each item (use them when relevant):
+**Heuristic**: if a previous `search` returned empty / wrong results for a structured query, call `list_engines` and read its `engine_options_examples` first.
 
-| Engine                | Extra fields                                                           |
-|-----------------------|------------------------------------------------------------------------|
-| `youtube`             | `video_id`, `channel`, `views`, `duration`, `upload_date`              |
-| `imdb`                | `imdb_id`, `year`, `content_type`, `runtime`, `imdb_rating`, `vote_count` |
-| `goodreads`           | `goodreads_id`, `author`, `avg_rating`, `rating_count`, `image_url`    |
-| `arxiv`               | `arxiv_id`, `authors`, `categories`, `published`, `pdf_url`            |
-| `huggingface`         | `model_id`, `author`, `downloads`, `likes`, `pipeline_tag`, `tags`     |
-| `reddit_subreddit`    | `score`, `num_comments`, `author`, `created_utc`                       |
-| `amazon` / `ebay`     | `price`, `rating`, `condition`, `shipping`, `seller`                   |
-| `unsplash`/`pixabay`/`pexels` | `image_url`, `photographer`, `alt_text`                       |
-| `apple_podcasts`      | `track_id`, `artist`, `genre`, `feed_url`, `release_date`              |
+---
+
+## The 80+ Engines
+
+Always pick the engine that matches the user's intent. Fall back to `google` / `duckduckgo` / `bing` when uncertain.
+
+| Category | Engines |
+|---|---|
+| **General search** | `google` · `bing` · `duckduckgo` · `brave` · `yandex` · `startpage` · `ecosia` · `qwant` |
+| **Chinese search** | `baidu` · `sogou` · `so360` |
+| **Code / dev** | `github` (`github_search`) · `stackoverflow` · `hackernews` · `npm` (`npm_search`) · `devto` |
+| **AI / research** | `huggingface` · `arxiv` |
+| **Knowledge** | `wikipedia` · `wikivoyage` · `pubmed` · `wolfram` |
+| **Forums / community** | `reddit` · `reddit_subreddit` · `quora` · `blackhatworld` · `producthunt` |
+| **Social — global** | `twitter` / `x` · `instagram` |
+| **Social — Chinese** | `zhihu` · `weibo` · `xiaohongshu` · `douyin` · `toutiao` · `bilibili` |
+| **Western news** | `bbc` · `guardian` · `reuters` · `apnews` · `cnn` · `npr` · `aljazeera` · `techcrunch` · `verge` · `arstechnica` |
+| **Video / streaming** | `youtube` · `twitch` · `netflix` · `tiktok` |
+| **Audio / podcasts** | `spotify` · `soundcloud` · `apple_podcasts` · `xiaoyuzhou` |
+| **Movies & books** | `imdb` · `goodreads` |
+| **Long-form** | `medium` |
+| **E-commerce** | `amazon` · `ebay` · `icecat` · `steam` |
+| **Jobs & local** | `linkedin_jobs` · `indeed` · `yelp` |
+| **Patents & security** | `google_patents` · `virustotal` |
+| **Archive & files** | `archive_org` · `torrent_1337x` |
+| **Images** | `unsplash` · `pixabay` · `pexels` · `pinterest` |
+| **📣 Ads — competitive research** 🆕 | `meta_ad_library` (aliases: `fb_ads` `meta_ads`) · `instagram_ad_library` · `tiktok_creative_center` (aliases: `tt_ads` `ttcc`) · `tiktok_ad_library` · `google_ad_transparency` (alias: `g_ads`) |
+| **📚 Developer docs** 🆕 | `fb_docs` (Meta only, 16 product slugs) · `dev_docs` (alias: `docs`, 142 presets) — see `list_dev_docs_platforms` for the full preset list |
+| **📱 App stores** 🆕 | use `search_app` / `lookup_app` (not `search`) — Apple App Store + Google Play |
+
+Run `list_engines` to see the live count + categories + `engine_options` examples.
+
+---
+
+## 📚 Developer Docs Engine — 142 Platforms
+
+The `dev_docs` engine is a DDG site-search wrapper with 142 curated platform presets across 15 categories. Each preset maps to one or more documentation hosts; multi-host presets fan out across them.
+
+### Preset categories (call `list_dev_docs_platforms`)
+
+| Category | Sample aliases |
+|---|---|
+| **Cloud / Infra** | `aws` · `gcp` · `azure` · `docker` · `kubernetes` · `terraform` · `github` · `gitlab` · `cloudflare` · `vercel` · `netlify` |
+| **APIs / SaaS** | `stripe` · `twilio` · `slack` · `discord` · `shopify` · `supabase` · `firebase` · `mongodb` · `redis` · `postgresql` |
+| **AI / ML** | `openai` · `anthropic` / `claude` · `huggingface` · `cohere` · `pinecone` · `gemini` / `google-ai` · `langchain` · `llamaindex` |
+| **Frontend / Languages** | `mdn` · `react` · `vue` · `angular` · `svelte` · `nextjs` · `nodejs` · `python` · `typescript` · `rust` · `go` |
+| **Mobile dev** | `android` · `apple` / `ios` · `swift` · `flutter` · `react-native` · `expo` |
+| **Social platforms** | `tiktok` · `tiktok-business` · `tiktok-marketing` · `snap` · `twitter` / `x` · `pinterest` · `reddit` · `linkedin` |
+| **Messaging / Chat** | `whatsapp` · `whatsapp-cloud` · `telegram` · `telegram-bot` · `messenger` · `line` · `viber` · `wechat` · `kakao` |
+| **Meta megasite** | `meta` · `facebook` · `instagram` · `messenger` · `threads` · `whatsapp` (also: `fb_docs` engine for narrow product slugs) |
+| **Google products** | `firebase` · `google-ads` · `google-analytics` · `google-maps` · `google-pay` · `youtube` · `gemini` |
+| **Mobile analytics / attribution / ad-intel** | `data.ai` / `appannie` · `sensortower` · `appsflyer` · `appsflyer-performance-index` · `appsflyer-benchmarks` · `adjust` · `branch` · `applovin` / `applovin-max` · `bigspy` · `similarweb` · `admiral` · `businessofapps` · `qimai` / `七麦` · `diandian` / `点点数据` |
+| **Browsers** | `chrome` · `webkit` |
+| **DevOps / Observability** | `datadog` · `grafana` · `prometheus` · `sentry` · `opentelemetry` |
+| **Identity** | `auth0` · `okta` · `clerk` |
+| **Workspace** | `notion` · `airtable` · `linear` |
+| **ML training infra** | `wandb` · `mlflow` · `ray` |
+
+### How to call
+
+```jsonc
+// MCP
+search(
+  query="subscription webhook",
+  engine="dev_docs",
+  engine_options={"platform": "stripe", "mode": "reference"},
+  limit=5,
+  depth=3   // also extracts top 3 markdown bodies in one call
+)
+
+// CLI
+agentsearch search "subscription webhook" -e docs --platform stripe --mode reference --limit 5
+```
+
+When DDG returns 0 results (residential IP throttle), the engine automatically falls back to Brave then Bing. `last_status['backend']` reports which produced results.
+
+---
+
+## 📣 Ad Libraries — Competitive Research
+
+Five engines cover the four biggest paid platforms:
+
+| Engine | Aliases | Modes / `engine_options` |
+|---|---|---|
+| `meta_ad_library` | `fb_ads`, `meta_ads` | `mode`: `keyword` (default) / `advertiser` (page_id=) / `page_url` (page_url=); `country`, `active_status`, `ad_type`, `media_type`, `publisher_platforms` |
+| `instagram_ad_library` | `ig_ads`, `instagram_ads` | Same as Meta but locked to Instagram placement |
+| `tiktok_creative_center` | `tt_ads`, `ttcc` | 19 modes — `top_ads` / `top_ads_spotlight` / `keyword_insights` / `creative_insights` / `top_products` / `trending_hashtags` / `hashtag_analytics` / `trending_songs` / `song_analytics` / `trending_creators` / `trending_videos` / `ad_analytics` / `ad_keyframe` / `ad_percentile` / `ad_recommend` / … (6 public, 13 auth-required) |
+| `tiktok_ad_library` | `tiktok_ads` | EU/UK only DSA library |
+| `google_ad_transparency` | `g_ads` | 4 modes — `search_advertisers` / `domain` / `advertiser_ads` / `creative_detail`; needs `region` |
+
+### Recipes
+
+```jsonc
+// 1. All Meta ads run by Shopify
+search(query="Shopify", engine="meta_ad_library",
+       engine_options={"country": "US", "active_status": "active"}, limit=20)
+
+// 2. Same but precise (page_id-canonical)
+search(query="", engine="meta_ad_library",
+       engine_options={"mode": "advertiser", "page_id": "20409006880"}, limit=20)
+
+// 3. Google ads from a domain
+search(query="shopify.com", engine="google_ad_transparency",
+       engine_options={"mode": "domain", "domain": "shopify.com", "region": "US"})
+
+// 4. Top TikTok e-commerce ads, last 30 days
+search(query="", engine="tiktok_creative_center",
+       engine_options={"mode": "top_ads", "country": "US",
+                       "industry": "ecommerce", "period": 30}, limit=20)
+
+// 5. End-to-end: app URL → ads on every platform
+find_competitor_ads(
+  app_url="https://apps.apple.com/us/app/shopify/id371294472",
+  platforms=["meta", "instagram", "google", "tiktok"],
+  limit_per_platform=10,
+  precise=true,   // resolve developer name → Facebook page_id first
+)
+
+// 6. Then download every creative
+download_ad_media(
+  records=<results from #1 or #5>,
+  output_dir="./swipe_file",
+  max_per_record=1,   // highest-quality only
+  max_workers=4,
+)
+```
+
+**Tip:** Google ATC under residential proxy may need raw-HTTP transport. `GoogleAdTransparencyEngine.raw(proxy_url=…)` (CLI: implicit). For all five engines see [the Ad-Intelligence section in README](../../README.md#-ad-intelligence).
+
+---
+
+## 📱 App Store Search
+
+Two dedicated tools (don't go through the generic `search` — they have richer metadata schemas):
+
+```jsonc
+// Find every Shopify-themed app on iOS + Google Play
+search_app(query="shopify", store="all", limit=20, with_contact=true)
+
+// Single app metadata
+lookup_app(app_url="https://apps.apple.com/us/app/shopify/id371294472")
+// → {store, app_id, bundle_id, title, developer_name, website, domain,
+//    category, rating, rating_count, description, icon_url, screenshots,
+//    support_email, privacy_url, ...}
+```
+
+`search_app` results are normalised across both stores; pass each row's URL into `find_competitor_ads` to chain into a full creative-research workflow.
+
+---
+
+## Quick Recipes
+
+### R1 — Generic web search
+```jsonc
+search(query="what the user asked", engine="duckduckgo", limit=5)
+```
+
+### R2 — Code / docs lookup (with engine_options for dev_docs)
+```jsonc
+search(query="subscription webhook", engine="dev_docs",
+       engine_options={"platform": "stripe", "mode": "reference"})
+search(query="kubernetes ingress controller", engine="github", limit=5)
+```
+
+### R3 — Latest research
+```jsonc
+search(query="transformer scaling laws", engine="arxiv", limit=5,
+       engine_options={"sort_by": "submittedDate"})
+```
+
+### R4 — Discussion / opinions
+```jsonc
+search(query="best linux laptop 2026", engine="reddit",
+       engine_options={"sort": "top", "time": "month"}, limit=5)
+```
+
+### R5 — Video / how-to
+```jsonc
+search(query="react hooks tutorial", engine="youtube",
+       engine_options={"upload_date": "this_year", "sort_by": "view_count"}, limit=10)
+```
+
+### R6 — Chinese platforms
+```jsonc
+search(query="机器学习", engine="zhihu", limit=5)
+search(query="旅行攻略", engine="xiaohongshu", limit=5)
+```
+
+### R7 — Search → read top N markdown in ONE call
+```jsonc
+search(query="transformer scaling laws", engine="arxiv",
+       limit=5, depth=3)
+// Top 3 results have body_markdown attached
+```
+
+### R8 — Read a list of URLs (after a search)
+```jsonc
+extract_many(urls=[r["url"] for r in search_result["results"][:5]],
+             paginate=true, max_scrolls=2)
+```
+
+### R9 — Find competitor ads from an App Store URL
+```jsonc
+find_competitor_ads(app_url="…", precise=true, limit_per_platform=10)
+```
+
+### R10 — Browse 142 dev_docs preset platforms
+```jsonc
+list_dev_docs_platforms(filter_substring="appsflyer")
+list_dev_docs_platforms(category="mobile_ad_intel")
+```
+
+### R11 — Bulk-download competitor ad creatives
+```jsonc
+ads = search(query="Shopify", engine="meta_ad_library", limit=50)
+download_ad_media(records=ads["results"], output_dir="./swipe_file",
+                  max_per_record=1)
+```
+
+### R12 — Login once for walled sites (CLI only — sessions persist for `search`/`extract`)
+```bash
+agentsearch login twitter
+agentsearch login linkedin
+agentsearch login glassdoor      # custom site → pass --url
+
+# Use the saved session in any follow-up search
+agentsearch search "from:elonmusk AI" --engine twitter --profile twitter --limit 10
+```
+
+| Site | Why login |
+|---|---|
+| `twitter` / `x` | Public API gone; logged-in user gets full feed |
+| `linkedin` | Profile pages require login since 2024 |
+| `glassdoor` | Reviews / salaries paywalled |
+| `instagram` / `facebook` | Most content requires login |
+| `discord` / `medium` / `quora` | Members-only content |
+
+---
+
+## CLI Reference (when MCP isn't available)
+
+The MCP tools above also exist as CLI subcommands:
+
+```bash
+# Activate the venv first
+source ~/tools/cloakbrowser/venv/bin/activate
+cd ~/projects/AgentSearch
+
+# Generic search
+agentsearch search "X" -e <engine> --limit 5 --json
+agentsearch search "X" -e dev_docs --platform stripe --mode reference --json
+
+# Multi-engine fan-out (parallel, URL-deduped)
+agentsearch search-many "X" --engines duckduckgo,hackernews,github --merged --json
+
+# Health-aware fallback chain
+agentsearch search "X" -e google --fallback --json
+agentsearch status   # show engine health table
+
+# Extract one URL
+agentsearch extract "https://example.com" --json
+
+# App Store
+agentsearch app-search "shopify" --store all --with-contact --json
+
+# Ad libraries (dedicated commands; richer than raw engine search)
+agentsearch ads "fitness app" --filter country=US --filter active=true
+agentsearch ads-by-app "https://apps.apple.com/.../id<NUM>" --precise --json
+agentsearch ads-batch competitors.txt --workers 4 --proxy-pool proxies.txt
+agentsearch ads-download ads.jsonl --output-dir ./swipe_file --max-per-record 1
+```
 
 ---
 
 ## Engine-Selection Heuristics
 
-**For agents deciding which engine to call when the user wasn't specific:**
+When the user wasn't specific:
 
-1. **Generic factual question** → `duckduckgo` (most reliable, no consent dialog).
-2. **Latest news / current events** → `google` (best freshness).
-3. **Code error / programming question** → `stackoverflow` first, then `github`.
-4. **Academic / scientific** → `arxiv` for ML / physics / CS, `pubmed` for medical.
-5. **Open-source library** → `github`, supplement with `npm` for JS.
-6. **Discussion / "what do people think"** → `reddit`, fallback `hackernews`.
-7. **Video tutorial / demonstration** → `youtube`. For Chinese audiences `bilibili`.
-8. **Product review / shopping** → `amazon` for new, `ebay` for used.
-9. **Restaurant / local business** → `yelp`.
-10. **Picture / mood board** → `unsplash` (hi-res free) or `pinterest` (variety).
-11. **Movie / TV info** → `imdb`. For "what to watch" → `netflix`.
-12. **Book search / reviews** → `goodreads`.
-13. **Podcast** → `apple_podcasts`. Chinese podcast → `xiaoyuzhou`.
-14. **Patent prior-art** → `google_patents`.
-15. **File hash / virus scan** → `virustotal`.
-16. **Chinese-language query** → `baidu` or `zhihu` over `google` for better recall.
-
----
-
-## Common Patterns
-
-### Multi-engine fan-out for breadth
-When the user asks something open-ended ("research X for me"), use the
-built-in `search-many` subcommand instead of calling N engines manually
-— it parallelises the launches and merges results by URL with a
-consensus signal:
-
-```bash
-agentsearch search-many "X" \
-    --engines google,reddit,arxiv,hackernews --limit 5 --merged --json
-```
-
-This is roughly 2-3× faster than calling `search` once per engine and
-returns one URL-deduped feed.
-
-### Fallback chain for resilience
-Use the built-in `--fallback` flag instead of writing retry loops:
-
-```bash
-agentsearch search "X" --engine google --fallback --json
-```
-
-The fallback chain (default: `duckduckgo,google,bing,brave,startpage,
-qwant,ecosia`) is reordered by recent health on every call, so a
-flaky engine bubbles down automatically. Inspect with `cloak status`.
-
-### One-shot SERP + body
-For "research and read" turns, use `--depth N` so the top N result
-URLs come back with `body_markdown` already attached. Saves a
-follow-up `extract` round-trip per top hit:
-
-```bash
-agentsearch search "X" --engine reddit --limit 5 --depth 3 --json
-```
-
-### Refining a query for a target site
-For Chinese and walled platforms (`xiaohongshu`, `douyin`, `weibo`, `toutiao`, `xiaoyuzhou`)
-the adapters automatically fall back to `site:` searches on Google/Bing/DuckDuckGo. The
-caller doesn't need to do anything special — the adapter handles it.
+1. **Generic factual question** → `duckduckgo` (most reliable, no consent dialog)
+2. **Latest news / current events** → `google`
+3. **Code error / programming question** → `stackoverflow` first, then `github`
+4. **Developer documentation** → `dev_docs` with the right `platform`
+5. **Academic / scientific** → `arxiv` for ML/CS, `pubmed` for medical
+6. **Open-source library** → `github`, supplement with `npm` for JS
+7. **Discussion / "what do people think"** → `reddit`, fallback `hackernews`
+8. **Video tutorial** → `youtube`. Chinese → `bilibili`
+9. **Shopping** → `amazon` for new, `ebay` for used
+10. **Restaurant / local business** → `yelp`
+11. **Picture / mood board** → `unsplash` (hi-res free) or `pinterest`
+12. **Movie / TV info** → `imdb`. Book → `goodreads`. Podcast → `apple_podcasts` / `xiaoyuzhou`
+13. **Patent prior-art** → `google_patents`
+14. **File hash / virus scan** → `virustotal`
+15. **Chinese-language query** → `baidu` or `zhihu` over `google` for recall
+16. **Competitor ad research** → start with `find_competitor_ads`; drop to individual ad-library engines for narrow modes
+17. **App-store metadata** → `lookup_app` (single) or `search_app` (keyword)
 
 ---
 
-## Python API (when CLI isn't enough)
+## Output Format
 
-```python
-import sys
-sys.path.insert(0, "/Users/<user>/projects/AgentSearch")  # absolute path
+`search` returns:
 
-from agent_search.core import launch, BrowserConfig, new_page
-from agent_search.engines.duckduckgo import DuckDuckGoEngine
-
-browser = launch(BrowserConfig(headless=True, humanize=True))
-try:
-    page = new_page(browser)
-    engine = DuckDuckGoEngine(page)
-    results = engine.search("transformer attention", limit=5)
-    for r in results:
-        print(f"{r.title}\n  {r.url}\n  {r.snippet}\n")
-finally:
-    browser.close()
+```json
+{
+  "engine": "google",
+  "query": "open source software",
+  "count": 5,
+  "results": [
+    {
+      "title": "...",
+      "url": "...",
+      "snippet": "...",
+      "score": null,
+      "body_markdown": "..."   // present when depth > 0
+    }
+  ]
+}
 ```
 
-Every engine is in `agent_search.engines.<name>` and exposes a
-`<NameCamelCase>Engine` class that takes a `page` object and provides
-`search(query: str, limit: int) -> list[SearchResult]`.
+Engine-specific extras on each result (use them when relevant):
 
----
-
-## Important Operational Notes
-
-1. **Always activate venv before running**: `source ~/tools/cloakbrowser/venv/bin/activate`
-2. **Each call launches a Chromium instance** (≈ 0.5s startup). Batch when possible —
-   don't loop one query per call when 1 query → many engines is better.
-3. **Default `--limit 5`**. Maximum useful is 20 for most engines (Google caps SERP at ~10).
-4. **Results sometimes come back below `limit`**: most search engines pack ads / "people also ask"
-   panels into the SERP. Yield is typically 90-100% in stress tests but not guaranteed 100%.
-5. **Walled sites use external-search-engine fallback automatically** — when you call
-   `xiaohongshu`, `douyin`, `weibo`, `toutiao`, `xiaoyuzhou`, the adapter first tries the
-   site's own search; if that's blocked it transparently routes through Google/Bing/DDG
-   with a `site:` filter. The returned `SearchResult` carries a `source` attribute
-   indicating which path produced the hit.
-
----
-
-## Troubleshooting
-
-| Symptom                                         | Fix                                                   |
-|-------------------------------------------------|-------------------------------------------------------|
-| `cannot import name 'core'` from another path   | Run from `~/projects/AgentSearch` or set `PYTHONPATH` |
-| Google shows a CAPTCHA / sorry interstitial     | Switch to `--engine duckduckgo` for the next 30 min   |
-| Empty `results: []`                             | Try a different engine; site may have changed DOM     |
-| `ImportError: cloakbrowser`                     | `pip install cloakbrowser` inside the venv            |
-| Browser hangs                                   | Add `--no-headless` to debug visually                 |
+| Engine | Extra fields |
+|---|---|
+| `youtube` | `video_id`, `channel`, `views`, `duration`, `upload_date` |
+| `imdb` | `imdb_id`, `year`, `content_type`, `runtime`, `imdb_rating`, `vote_count` |
+| `goodreads` | `goodreads_id`, `author`, `avg_rating`, `rating_count`, `image_url` |
+| `arxiv` | `arxiv_id`, `authors`, `categories`, `published`, `pdf_url` |
+| `huggingface` | `model_id`, `author`, `downloads`, `likes`, `pipeline_tag`, `tags` |
+| `reddit_subreddit` | `score`, `num_comments`, `author`, `created_utc` |
+| `amazon` / `ebay` | `price`, `rating`, `condition`, `shipping`, `seller` |
+| `unsplash` / `pixabay` / `pexels` | `image_url`, `photographer`, `alt_text` |
+| `apple_podcasts` | `track_id`, `artist`, `genre`, `feed_url`, `release_date` |
+| `dev_docs` / `fb_docs` | `doc_site`, `doc_section`, `platform`, `product`, `api_version` |
+| `meta_ad_library` / `instagram_ad_library` | `ad_archive_id`, `page_id`, `page_name`, `start_date`, `end_date`, `eu_total_reach`, `image_urls`, `video_url`, `cover_image_url`, `creatives[]`, `link_url`, `body_text`, `cta`, `ad_type`, `publisher_platforms` |
+| `tiktok_creative_center` | `creative_id`, `industry`, `country_code`, `like_count`, `share_count`, `comment_count`, `cover_image_url`, `video_url`, `duration`, `tags`, `metric_value` |
+| `google_ad_transparency` | `creative_id`, `advertiser_id`, `advertiser_name`, `domain`, `format`, `region`, `first_seen`, `last_seen`, `image_url`, `video_url`, `youtube_video_id` |
 
 ---
 
 ## Privacy Guarantee
 
-- 🔒 100% local — Chromium runs on the user's machine, results parsed locally
-- 🚫 Zero data leakage — no queries sent to any third-party API or cloud service
-- 🔑 No API keys — no accounts, no sign-ups, no authentication tokens
-- 📊 No telemetry — zero tracking, zero analytics, zero usage monitoring
-- 💰 100% free — no subscriptions, no rate limits
+- 🔒 **100% local** — Chromium runs on the user's machine; results parsed locally
+- 🚫 **Zero data leakage** — no queries sent to any third-party API or cloud service
+- 🔑 **No API keys** — no accounts, sign-ups, or authentication tokens
+- 📊 **No telemetry** — zero tracking, zero analytics, zero usage monitoring
+- 💰 **100% free** — no subscriptions, no rate limits
 
-The only network traffic is the direct request from the user's machine to the target site
-(e.g., `google.com/search?q=...`). Nothing else.
+The only network traffic is the direct request from the user's machine to the target site (e.g. `google.com/search?q=…`, `docs.stripe.com`, `meta.com/ads/library`). Nothing else.
+
+---
+
+## Troubleshooting
+
+| Symptom | Fix |
+|---|---|
+| Google CAPTCHA / sorry interstitial | Switch `engine="duckduckgo"` for the next 30 min |
+| `dev_docs` empty results | DDG throttle — engine auto-falls-back to Brave/Bing; retry |
+| `meta_ad_library` keyword too broad | Run `lookup_pages` first to get a canonical `page_id`, then `mode="advertiser"` |
+| Google ATC blocks navigation | Pass `proxy_url`; raw-HTTP transport kicks in automatically under proxy |
+| App Store URL not resolving | Confirm the URL contains `/id<NUM>` (Apple) or `?id=<PKG>` (Google Play) |
+| `extract` returns thin content | Set `paginate=true, max_scrolls=3` to surface lazy content |
+| Chinese site returns 0 hits | Site likely walled — adapter auto-falls-back to Google/Bing/DDG with `site:` filter |
+| Browser hangs | Add `--no-headless` (CLI) or `AGENTSEARCH_HEADLESS=0` (MCP) to debug visually |
 
 ---
 
 *One skill, the whole web — local, free, no API keys.*
+*80+ engines · 142 dev-docs platforms · 5 ad libraries · App Store search · 9 MCP tools.*
