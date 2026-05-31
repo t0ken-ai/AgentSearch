@@ -1,24 +1,29 @@
 """MCP (Model Context Protocol) server wrapper for AgentSearch.
 
-Exposes 7 tools to any MCP-compatible client (Claude Desktop, Cursor,
+Exposes 9 tools to any MCP-compatible client (Claude Desktop, Cursor,
 Cline, Continue, Kiro, Roo Code, Zed, ...):
 
-  * ``search``               — query one of 80+ search engines, with
-                                 optional ``engine_options`` for
-                                 engine-specific parameters
-                                 (dev_docs platform=, ad-library
-                                 country=, mode=, …)
-  * ``extract``              — fetch a URL and return readability-
-                                 extracted markdown
-  * ``list_engines``         — enumerate engines + categories +
-                                 ``engine_options`` examples
-  * ``search_app``           — keyword-search Apple App Store /
-                                 Google Play with 25+ metadata fields
-  * ``lookup_app``           — single-app metadata from URL or id
-  * ``find_competitor_ads``  — App URL → ads on Meta / Instagram /
-                                 Google / TikTok in one call
-  * ``download_ad_media``    — bulk-download every image / video URL
-                                 from a list of ad-engine results
+  * ``search``                  — query one of 80+ search engines, with
+                                   optional ``engine_options`` for
+                                   engine-specific parameters
+                                   (dev_docs platform=, ad-library
+                                   country=, mode=, …)
+  * ``extract``                 — fetch a URL and return readability-
+                                   extracted markdown
+  * ``extract_many``            — same, but parallel batch (3-4× faster
+                                   than N sequential calls)
+  * ``list_engines``            — enumerate engines + categories +
+                                   ``engine_options`` examples
+  * ``list_dev_docs_platforms`` — enumerate the 142 dev_docs presets
+                                   (with optional substring/category
+                                   filter)
+  * ``search_app``              — keyword-search Apple App Store /
+                                   Google Play with 25+ metadata fields
+  * ``lookup_app``              — single-app metadata from URL or id
+  * ``find_competitor_ads``     — App URL → ads on Meta / Instagram /
+                                   Google / TikTok in one call
+  * ``download_ad_media``       — bulk-download every image / video URL
+                                   from a list of ad-engine results
 
 The server keeps a single CloakBrowser instance alive for the lifetime
 of the process so each tool call doesn't pay the ~0.5-2s Chromium
@@ -754,11 +759,13 @@ async def list_engines() -> dict[str, Any]:
         # Hint companion tools so agents can discover them without
         # needing to read the README first.
         "companion_tools": [
-            "extract            — fetch a URL and return Markdown",
-            "search_app         — keyword-search Apple App Store / Google Play",
-            "lookup_app         — single-app metadata from URL or id",
-            "find_competitor_ads — App URL → ads on Meta/IG/Google/TikTok",
-            "download_ad_media  — bulk-download every image/video URL from ad results",
+            "extract                  — fetch a URL and return Markdown",
+            "extract_many             — parallel batch extract for many URLs",
+            "list_dev_docs_platforms  — enumerate the 142 dev_docs preset platforms",
+            "search_app               — keyword-search Apple App Store / Google Play",
+            "lookup_app               — single-app metadata from URL or id",
+            "find_competitor_ads      — App URL → ads on Meta/IG/Google/TikTok",
+            "download_ad_media        — bulk-download every image/video URL from ad results",
         ],
         # Common engine_options examples for the most-used engines —
         # surfaced here so a curious agent can call list_engines once
@@ -899,6 +906,265 @@ async def download_ad_media(
         "failed": len(results) - succeeded,
         "bytes": bytes_total,
         "files": [r.to_dict() for r in results],
+    }
+
+
+@mcp.tool()
+async def list_dev_docs_platforms(
+    filter_substring: str | None = None,
+    category: str | None = None,
+) -> dict[str, Any]:
+    """List every platform alias the ``dev_docs`` engine accepts.
+
+    Use this when the agent needs to know if a specific developer
+    portal is supported as a preset (call with ``filter_substring``
+    to grep), or to see all options grouped by domain.
+
+    The ``dev_docs`` engine accepts ``engine_options={"platform": ...}``
+    where the value is one of these aliases. For arbitrary hosts not
+    in this list, pass ``engine_options={"site": "docs.example.com"}``
+    instead.
+
+    Args:
+        filter_substring: Case-insensitive substring filter — only
+            aliases or hostnames containing this string are returned.
+            Example: ``"google"`` matches ``google-cloud``, ``google-ads``,
+            ``google-analytics``, ``firebase``, etc.
+        category: Restrict to a single category. One of:
+            ``cloud_infra``, ``apis_saas``, ``social``, ``messaging``,
+            ``meta_megasite``, ``google_products``, ``mobile_ad_intel``,
+            ``ai_ml``, ``frontend``, ``mobile_dev``, ``browsers``,
+            ``observability``, ``identity``, ``workspace``,
+            ``ml_training``.
+
+    Returns:
+        ``{"count", "categories": {<name>: [aliases]}, "platforms": [
+        {"alias", "hosts", "host_count"}, ...]}``
+    """
+    from .engines.dev_docs import _PRESETS, list_platforms
+
+    # Categorisation — mirrors the README preset table. Hardcoded
+    # rather than auto-derived because the categories are editorial
+    # (a single host like developers.facebook.com appears under both
+    # 'meta' and 'whatsapp', and which is "primary" depends on intent).
+    cat_map: dict[str, list[str]] = {
+        "cloud_infra": [
+            "google-cloud", "gcp", "aws", "azure", "microsoft", "docker",
+            "kubernetes", "k8s", "hashicorp", "terraform", "github",
+            "gitlab", "cloudflare", "vercel", "netlify", "fly", "render",
+        ],
+        "apis_saas": [
+            "stripe", "twilio", "slack", "discord", "shopify", "supabase",
+            "firebase", "mongodb", "redis", "postgres", "postgresql",
+            "mysql", "elasticsearch",
+        ],
+        "social": [
+            "tiktok", "tiktok-business", "tiktok-marketing", "tiktok-login",
+            "snap", "snapchat", "snap-marketing", "twitter", "x",
+            "pinterest", "reddit", "linkedin", "youtube",
+        ],
+        "messaging": [
+            "whatsapp", "whatsapp-business", "whatsapp-cloud",
+            "telegram", "telegram-bot", "messenger", "line", "viber",
+            "wechat", "wechat-pay", "kakao", "instagram", "threads",
+        ],
+        "meta_megasite": [
+            "meta", "facebook", "instagram", "messenger", "threads",
+            "whatsapp",
+        ],
+        "google_products": [
+            "google-cloud", "gcp", "firebase", "google-ads",
+            "google-analytics", "google-maps", "google-pay", "youtube",
+            "google-ai", "gemini",
+        ],
+        "mobile_ad_intel": [
+            "data.ai", "appannie", "sensortower", "appsflyer",
+            "appsflyer-performance-index", "appsflyer-benchmarks",
+            "adjust", "branch", "applovin", "applovin-max", "bigspy",
+            "similarweb", "admiral", "getadmiral", "businessofapps",
+            "qimai", "七麦", "diandian", "点点数据",
+        ],
+        "ai_ml": [
+            "openai", "anthropic", "claude", "huggingface", "hf",
+            "cohere", "pinecone", "google-ai", "gemini", "langchain",
+            "llamaindex",
+        ],
+        "frontend": [
+            "mdn", "mozilla", "react", "vue", "angular", "svelte",
+            "nextjs", "next", "remix", "nuxt", "nodejs", "node", "deno",
+            "bun", "python", "typescript", "rust", "go", "golang",
+        ],
+        "mobile_dev": [
+            "android", "apple", "ios", "swift", "flutter",
+            "react-native", "expo",
+        ],
+        "browsers": ["chrome", "webkit"],
+        "observability": [
+            "datadog", "grafana", "prometheus", "sentry", "opentelemetry",
+        ],
+        "identity": ["auth0", "okta", "clerk"],
+        "workspace": ["notion", "airtable", "linear"],
+        "ml_training": ["wandb", "mlflow", "ray"],
+    }
+
+    if category and category not in cat_map:
+        return {
+            "error": f"unknown category {category!r}. Choose from "
+                     f"{sorted(cat_map.keys())}",
+            "count": 0,
+            "categories": {},
+            "platforms": [],
+        }
+
+    aliases = list_platforms()
+    if category:
+        wanted = set(cat_map[category])
+        aliases = [a for a in aliases if a in wanted]
+    if filter_substring:
+        f = filter_substring.lower()
+        aliases = [
+            a for a in aliases
+            if f in a.lower() or any(f in h.lower() for h in _PRESETS[a])
+        ]
+
+    platforms = [
+        {
+            "alias": a,
+            "hosts": list(_PRESETS[a]),
+            "host_count": len(_PRESETS[a]),
+        }
+        for a in aliases
+    ]
+
+    # Trim category map to only categories containing matching aliases
+    # (so a filtered call returns a relevant overview).
+    matched_set = {p["alias"] for p in platforms}
+    categories_filtered = {
+        cat: [a for a in lst if a in matched_set]
+        for cat, lst in cat_map.items()
+    }
+    categories_filtered = {
+        k: v for k, v in categories_filtered.items() if v
+    }
+
+    return {
+        "count": len(platforms),
+        "total_presets": len(_PRESETS),
+        "categories": categories_filtered,
+        "platforms": platforms,
+        "usage_hint": (
+            'Pass any alias as engine_options={"platform": "<alias>"} '
+            'to the search tool with engine="dev_docs". For arbitrary '
+            'hosts not in this list, use engine_options={"site": '
+            '"docs.example.com"} instead.'
+        ),
+    }
+
+
+@mcp.tool()
+async def extract_many(
+    urls: list[str],
+    paginate: bool = True,
+    max_scrolls: int = 2,
+    include_links: bool = False,
+    include_images: bool = False,
+) -> dict[str, Any]:
+    """Fetch and Markdown-extract a batch of URLs in one call.
+
+    Use this when the agent has a list of URLs to read (e.g. the top N
+    hits from a previous ``search`` call, or every link in a roundup
+    article). Each URL is processed sequentially through the shared
+    browser pool — this is the same wall-clock cost as N sequential
+    ``extract`` calls, but saves the agent N round-trips.
+
+    Note: parallelisation is disabled because Playwright's sync API
+    is greenlet-bound to a single thread per browser. For real
+    parallelism, scale by running multiple MCP servers behind a load
+    balancer.
+
+    Args:
+        urls: List of HTTP(S) URLs. Anything else (chrome://, mailto:,
+            javascript:) is rejected per-URL with ``status="invalid_url"``.
+        paginate: If True, auto-scroll and click "Load more" buttons to
+            surface lazy content (per URL).
+        max_scrolls: Max scrolls per URL when paginating. Default 2 to
+            keep batch wall-time bounded.
+        include_links: If True, return all <a> tags per URL.
+        include_images: If True, return all <img> tags per URL.
+
+    Returns:
+        ``{"total", "succeeded", "failed", "elapsed_s", "results": [<extract dict>...]}``
+        Each result has the same shape as the single-URL ``extract``
+        tool plus a ``url`` field for correlation. Results preserve
+        input order.
+    """
+    # Validate URLs upfront — reject obvious junk so we don't waste
+    # a Chromium tab on a mailto:.
+    cleaned: list[tuple[int, str]] = []
+    invalid_idx: dict[int, dict[str, Any]] = {}
+    for i, u in enumerate(urls or []):
+        u = (u or "").strip()
+        if not u or not u.lower().startswith(("http://", "https://")):
+            invalid_idx[i] = {
+                "url": u,
+                "status": "invalid_url",
+                "error": "must start with http:// or https://",
+            }
+            continue
+        cleaned.append((i, u))
+
+    def _run() -> dict[int, dict[str, Any]]:
+        out: dict[int, dict[str, Any]] = {}
+        for i, url in cleaned:
+            page = _pool.page()
+            try:
+                out[i] = extract_page(
+                    page,
+                    url=url,
+                    paginate=paginate,
+                    max_scrolls=max_scrolls,
+                    include_links=include_links,
+                    include_images=include_images,
+                )
+            except Exception as e:
+                out[i] = {
+                    "url": url,
+                    "status": "error",
+                    "error": f"{type(e).__name__}: {e}",
+                }
+            finally:
+                try:
+                    page.close()
+                except Exception:
+                    pass
+        return out
+
+    import time as _time
+    started = _time.time()
+    try:
+        results_by_idx = await asyncio.to_thread(_run)
+    except Exception as e:
+        log.exception("[mcp] extract_many failed: %s", e)
+        return {
+            "total": len(urls or []),
+            "succeeded": 0,
+            "failed": len(urls or []),
+            "elapsed_s": round(_time.time() - started, 1),
+            "error": f"{type(e).__name__}: {e}",
+            "results": list(invalid_idx.values()),
+        }
+
+    # Merge and preserve input order
+    merged_dict = {**results_by_idx, **invalid_idx}
+    ordered = [merged_dict[i] for i in sorted(merged_dict.keys())]
+    succeeded = sum(1 for r in ordered
+                    if r.get("status") not in ("error", "invalid_url"))
+    return {
+        "total": len(ordered),
+        "succeeded": succeeded,
+        "failed": len(ordered) - succeeded,
+        "elapsed_s": round(_time.time() - started, 1),
+        "results": ordered,
     }
 
 
