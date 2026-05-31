@@ -325,6 +325,8 @@ async def extract(
     max_scrolls: int = 3,
     include_links: bool = False,
     include_images: bool = False,
+    wait_for_selector: str | None = None,
+    wait_for_timeout_ms: int = 10000,
 ) -> dict[str, Any]:
     """Fetch a URL and extract its main article content as Markdown.
 
@@ -346,13 +348,21 @@ async def extract(
         include_links: If True, return all <a> tags as a list. Off by
             default to keep the payload small.
         include_images: If True, return all <img> tags. Off by default.
+        wait_for_selector: Optional CSS / XPath selector to wait for
+            after navigation, before extracting. Use this for JS-
+            rendered widgets where the static DOM is empty (e.g.
+            AppsFlyer benchmarks portal, data-heavy charts). Pass
+            ``"div[data-testid='chart']"`` or ``"text=Average CPI"``.
+            The result includes ``selector_matched: bool`` so the
+            caller can detect timeouts.
+        wait_for_timeout_ms: Per-selector wait budget. Default 10s.
 
     Returns:
         A dict with ``url``, ``status``, ``title``, ``author``,
         ``date``, ``description``, ``content_markdown``,
         ``content_text``, ``word_count``, ``extractor``, ``scrolls``,
-        ``load_more_clicks``, plus ``links`` / ``images`` when
-        requested.
+        ``load_more_clicks``, ``selector_waited``, ``selector_matched``,
+        plus ``links`` / ``images`` when requested.
     """
     def _run() -> dict[str, Any]:
         page = _pool.page()
@@ -364,6 +374,8 @@ async def extract(
                 max_scrolls=max_scrolls,
                 include_links=include_links,
                 include_images=include_images,
+                wait_for_selector=wait_for_selector,
+                wait_for_timeout_ms=wait_for_timeout_ms,
             )
         finally:
             try:

@@ -220,11 +220,22 @@ def extract_page(
     include_links: bool = True,
     include_images: bool = True,
     timeout_ms: int = 30000,
+    wait_for_selector: str | None = None,
+    wait_for_timeout_ms: int = 10000,
 ) -> dict[str, Any]:
     """Extract main content from a page as structured data.
 
     If ``url`` is provided, we navigate there first; otherwise we assume the
     caller already loaded the page.
+
+    Args (selected):
+        wait_for_selector:  Optional CSS / XPath selector to wait for after
+            navigation, before extracting. Useful for JS-rendered widgets
+            where the static DOM is empty (AppsFlyer benchmarks portal,
+            data-heavy SPAs). Pass e.g. ``"div[data-testid='chart']"`` or
+            ``"text=Average CPI"``. Returns ``status="empty"`` if the
+            selector never appears within ``wait_for_timeout_ms``.
+        wait_for_timeout_ms:  Per-selector wait budget. Default 10s.
 
     Returns a dict with keys:
       - url:               final URL after redirects
@@ -242,6 +253,8 @@ def extract_page(
       - extractor:         which path produced the content ("trafilatura" | "fallback")
       - scrolls:           number of auto-scrolls performed
       - load_more_clicks:  number of "Load more" clicks performed
+      - selector_waited:   the wait_for_selector argument (echoed for diagnosis)
+      - selector_matched:  bool — whether the selector was found
     """
     out: dict[str, Any] = {
         "url": url or "",
@@ -257,6 +270,8 @@ def extract_page(
         "extractor": None,
         "scrolls": 0,
         "load_more_clicks": 0,
+        "selector_waited": wait_for_selector or "",
+        "selector_matched": False,
     }
 
     if url:
@@ -270,6 +285,21 @@ def extract_page(
         out["url"] = page.url
     except Exception:
         pass
+
+    # Wait for a custom selector (e.g. a JS-rendered widget) before
+    # falling through to scroll/extract. If the selector never appears,
+    # we still attempt extraction — the caller can read selector_matched
+    # to decide whether the body is meaningful.
+    if wait_for_selector:
+        try:
+            page.wait_for_selector(
+                wait_for_selector, timeout=wait_for_timeout_ms,
+            )
+            out["selector_matched"] = True
+        except Exception as e:
+            log.debug("wait_for_selector %r timed out: %s",
+                      wait_for_selector, e)
+            out["selector_matched"] = False
 
     # Capture <title> as a baseline. Trafilatura's metadata may overwrite this
     # later with a cleaner version (e.g. without site suffix).
