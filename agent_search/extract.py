@@ -503,7 +503,13 @@ def extract_page(
     out["content_text"] = txt_content
     out["word_count"] = _word_count(txt_content)
     out["extractor"] = extractor
-    out["status"] = "ok" if (md_content or txt_content) else "empty"
+    # Final status — but never downgrade a cloudflare_blocked verdict.
+    # When the challenge gate hung, trafilatura usually still extracts
+    # a few words from the gate page itself; that's not real content.
+    if out.get("challenge_detected") and not out.get("challenge_cleared", True):
+        out["status"] = "cloudflare_blocked"
+    else:
+        out["status"] = "ok" if (md_content or txt_content) else "empty"
 
     if include_links:
         out["links"] = _collect_links(page, base_url)
