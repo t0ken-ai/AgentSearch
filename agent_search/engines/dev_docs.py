@@ -185,6 +185,22 @@ _PRESETS: dict[str, list[str]] = {
     "bigspy":              ["bigspy.com",
                             "dev.bigspy.com",
                             "bigspy.crisp.help"],
+
+    # Industry data / news / benchmarks:
+    "businessofapps":      ["www.businessofapps.com"],
+    "boa":                 ["www.businessofapps.com"],
+    "appsflyer-benchmarks":["www.appsflyer.com/benchmarks"],
+    "appsflyer-bench":     ["www.appsflyer.com/benchmarks"],
+
+    # Web traffic intelligence (used to size up competitor websites):
+    "similarweb":          ["docs.similarweb.com",
+                            "developers.similarweb.com"],
+
+    # Visitor-relationship management / adblock recovery:
+    "admiral":             ["docs.getadmiral.com",
+                            "learn.getadmiral.com"],
+    "getadmiral":          ["docs.getadmiral.com",
+                            "learn.getadmiral.com"],
     # Chinese ASO / app-store intelligence portals. 七麦 = qimai.cn,
     # 点点数据 also ASO-focused — these aliases all map to the
     # broadest host so a Chinese-language query lands on the right
