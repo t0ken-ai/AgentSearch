@@ -164,7 +164,7 @@ async def search(
     for opinions, ``stackoverflow`` for code errors, ``arxiv`` for
     research, ``github`` for repositories, ``youtube`` for video,
     ``bilibili`` / ``zhihu`` / ``xiaohongshu`` for Chinese content,
-    ``dev_docs`` for any developer documentation portal (115 presets),
+    ``dev_docs`` for any developer documentation portal (142 presets),
     ``fb_docs`` for Meta developer docs, ``meta_ad_library`` /
     ``google_ad_transparency`` / ``tiktok_creative_center`` for ad
     competitor research, and so on. Call ``list_engines`` to see every

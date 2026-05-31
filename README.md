@@ -29,7 +29,7 @@
 ```bash
 pip install cloakbrowser && pip install -e .
 
-# Search any of 80 sites
+# Search any of 80+ sites
 agentsearch search "what's new in transformers" --engine google --json
 agentsearch search "react hooks tutorial"     --engine youtube --limit 10
 agentsearch search "best laptop 2025"         --engine reddit
@@ -256,7 +256,7 @@ finally:
 cp -r skills/agent-search ~/.openclaw/workspace/skills/
 ```
 
-Now your OpenClaw / Codex / Kiro agent natively knows how to search 80 sites — no plumbing, no prompts.
+Now your OpenClaw / Codex / Kiro agent natively knows how to search 80+ sites — no plumbing, no prompts.
 
 ---
 
@@ -384,7 +384,7 @@ The canary:
 - When `(EMPTY + FAIL) / total > 20%`, opens (or comments on) a GitHub issue tagged `canary-regression` via the `gh` CLI
 
 ```bash
-# Full sweep (~5 min, 80 engines, parallel=4)
+# Full sweep (~5 min, 80+ engines, parallel=4)
 agentsearch canary
 
 # Targeted subset
