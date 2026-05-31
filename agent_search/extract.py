@@ -158,6 +158,186 @@ def _build_trafilatura_config():
     return cfg
 
 
+# ---------------------------------------------------------------------------
+# Consent / cookie / popup dismisser
+# ---------------------------------------------------------------------------
+# Many MMP / ad-intel / news portals (AppsFlyer, Adjust, Branch, Statista,
+# businessofapps, ppc.land, …) wrap their content behind a OneTrust /
+# Cookiebot / TrustArc / Quantcast cookie banner plus, increasingly, a
+# "Get the full report" newsletter modal. Without dismissal:
+#
+#   1. The banner DOM ends up in trafilatura's Markdown as boilerplate
+#      ("Accept All Cookies", "Manage Preferences", "We value your privacy",
+#      "Subscribe to our newsletter") — pure noise.
+#   2. The modal's overlay applies ``overflow: hidden`` to <body>, which
+#      prevents ``_auto_scroll`` from triggering lazy content below the fold.
+#
+# We deal with this in two passes:
+#
+#   1. Click well-known accept/close buttons (so the CMP sets its consent
+#      cookie and won't reappear on hop-around extracts).
+#   2. Surgically remove any banner-root DOM nodes that survive (handles
+#      half-broken CMPs and pages whose accept button is hidden behind a
+#      fingerprint check). Only targets well-known IDs + classes — never
+#      touches arbitrary elements.
+#
+# Order matters: specific CMP IDs first, then generic ARIA / text fallbacks.
+CONSENT_DISMISS_SELECTORS: list[str] = [
+    # ── OneTrust (AppsFlyer, Adjust, Branch, Statista, Adobe, many more) ──
+    "#onetrust-accept-btn-handler",
+    "#accept-recommended-btn-handler",
+    "button#onetrust-pc-btn-handler",
+    # ── Cookiebot (heavy in EU SaaS) ──
+    "#CybotCookiebotDialogBodyButtonAccept",
+    "#CybotCookiebotDialogBodyLevelButtonAccept",
+    "#CybotCookiebotDialogBodyLevelButtonAcceptAll",
+    "#CybotCookiebotDialogBodyButtonAcceptAll",
+    # ── TrustArc / TRUSTe ──
+    "#truste-consent-button",
+    "a.call",
+    # ── Quantcast Choice ──
+    ".qc-cmp2-summary-buttons button[mode='primary']",
+    # ── Didomi ──
+    "#didomi-notice-agree-button",
+    # ── Usercentrics ──
+    "button[data-testid='uc-accept-all-button']",
+    # ── Funding Choices (Google CMP) ──
+    ".fc-cta-consent",
+    # ── Generic accept-all by ARIA / visible text ──
+    "button[aria-label*='Accept all' i]",
+    "button[aria-label*='Accept All Cookies' i]",
+    "button:has-text('Accept all')",
+    "button:has-text('Accept All Cookies')",
+    "button:has-text('Accept All')",
+    "button:has-text('I accept')",
+    "button:has-text('I agree')",
+    "button:has-text('Got it')",
+    "button:has-text('Allow all')",
+    "button:has-text('同意')",
+    "button:has-text('接受')",
+    "button:has-text('接受所有')",
+    # ── Generic close icons for newsletter / "Get the report" modals ──
+    # Scoped to dialog/modal containers so we don't accidentally close a
+    # legitimate widget on the page (e.g. a chat bubble).
+    "[role='dialog'] button[aria-label*='close' i]",
+    "[role='dialog'] button[aria-label*='dismiss' i]",
+    ".modal button.close",
+    ".modal button[aria-label*='close' i]",
+    ".popup-close",
+    ".Modal-closeButton",
+]
+
+# JS to surgically remove any consent-banner DOM that survives clicking.
+# Targets the dominant CMP SDKs by id/class only — never selects on tag
+# names or generic text, so it can't accidentally delete page content.
+# Also restores the page scroll lock that OneTrust / Cookiebot apply to
+# <html>/<body> when their modal is open, so _auto_scroll can do its job.
+_CONSENT_BANNER_NUKE_JS = r"""
+() => {
+  const ids = [
+    'onetrust-consent-sdk',
+    'onetrust-banner-sdk',
+    'onetrust-pc-sdk',
+    'onetrust-pc-dark-filter',
+    'CybotCookiebotDialog',
+    'CybotCookiebotDialogBodyUnderlay',
+    'truste-consent-track',
+    'truste-consent-content',
+    'consent_blackbar',
+    'didomi-host',
+    'usercentrics-root',
+    'usercentrics-cmp-ui',
+  ];
+  const classes = [
+    'qc-cmp2-container',
+    'qc-cmp2-summary-buttons',
+    'optanon-alert-box-wrapper',
+    'fc-consent-root',
+    'fc-dialog-overlay',
+  ];
+  let removed = 0;
+  for (const id of ids) {
+    const el = document.getElementById(id);
+    if (el) { el.remove(); removed++; }
+  }
+  for (const cls of classes) {
+    document.querySelectorAll('.' + cls).forEach(el => { el.remove(); removed++; });
+  }
+  // OneTrust / Cookiebot lock page scroll while the modal is open.
+  // Restore it so the auto-scroll pass can surface lazy content.
+  try {
+    if (document.body) {
+      document.body.style.overflow = '';
+      document.body.style.position = '';
+    }
+    if (document.documentElement) {
+      document.documentElement.style.overflow = '';
+    }
+  } catch (_) {}
+  return removed;
+}
+"""
+
+
+def _dismiss_consent_banners(page, max_clicks: int = 4) -> dict[str, Any]:
+    """Best-effort: click consent / cookie / popup buttons + remove leftover DOM.
+
+    Two-pass strategy — see the module-level comment block above
+    ``CONSENT_DISMISS_SELECTORS`` for rationale.
+
+    Args:
+        page: Playwright page (already navigated).
+        max_clicks: Cap the number of successful clicks. Most pages have
+            at most one CMP banner + one newsletter modal, so 4 is plenty
+            of headroom while bounding worst-case latency.
+
+    Returns:
+        ``{"clicked": [<selectors that fired>], "removed": <int>}``.
+        ``removed`` counts banner-root nodes nuked via the JS fallback.
+        Never raises — every browser interaction is wrapped.
+    """
+    clicked: list[str] = []
+    for sel in CONSENT_DISMISS_SELECTORS:
+        if len(clicked) >= max_clicks:
+            break
+        try:
+            btn = page.query_selector(sel)
+        except Exception:
+            continue
+        if not btn:
+            continue
+        # Skip invisible matches — clicking them either errors or fires
+        # phantom analytics buttons that share a generic class name.
+        try:
+            if not btn.is_visible():
+                continue
+        except Exception:
+            continue
+        try:
+            btn.click(timeout=1500)
+            clicked.append(sel)
+            # Brief settle — banner exit-animations are typically <300ms,
+            # and we want any sibling modal to show before the next pass.
+            time.sleep(0.2)
+        except Exception:
+            continue
+
+    # Surgical DOM removal — bulletproof against half-broken CMPs.
+    removed = 0
+    try:
+        removed = int(page.evaluate(_CONSENT_BANNER_NUKE_JS) or 0)
+    except Exception as e:
+        log.debug("[extract] consent-banner nuke JS failed: %s", e)
+
+    if clicked or removed:
+        log.info(
+            "[extract] dismissed consent overlays: clicked=%s removed=%d",
+            clicked, removed,
+        )
+
+    return {"clicked": clicked, "removed": removed}
+
+
 def _auto_scroll(page, max_scrolls: int) -> int:
     """Scroll to the bottom up to ``max_scrolls`` times. Returns scrolls done.
 
@@ -436,6 +616,13 @@ def extract_page(
       - load_more_clicks:  number of "Load more" clicks performed
       - selector_waited:   the wait_for_selector argument (echoed for diagnosis)
       - selector_matched:  bool — whether the selector was found
+      - consent_clicked:   list[str] — CSS selectors that successfully fired
+                           against a cookie/consent/popup button (e.g.
+                           ``"#onetrust-accept-btn-handler"``). Empty list
+                           on pages without any banner.
+      - consent_removed:   int — number of banner-root DOM nodes nuked via
+                           the JS fallback (covers half-broken CMPs whose
+                           accept button doesn't actually dismiss).
     """
     out: dict[str, Any] = {
         "url": url or "",
@@ -457,6 +644,8 @@ def extract_page(
         "challenge_phrase": "",
         "challenge_cleared": True,
         "tables_extracted": 0,
+        "consent_clicked": [],
+        "consent_removed": 0,
     }
 
     if url:
@@ -518,6 +707,21 @@ def extract_page(
         out["title"] = (page.title() or "").strip()
     except Exception:
         pass
+
+    # Dismiss cookie / consent / GDPR / newsletter popups before scrolling.
+    # Without this, OneTrust-style banners (used by AppsFlyer, Adjust,
+    # Branch, Statista, businessofapps, ppc.land, …) leak boilerplate
+    # ("Accept All Cookies", "Subscribe to our newsletter") into the
+    # trafilatura output, and their scroll lock blocks lazy content
+    # from loading further down the page. See _dismiss_consent_banners
+    # for the two-pass strategy (click well-known accept buttons first,
+    # then surgically remove leftover banner DOM).
+    try:
+        consent = _dismiss_consent_banners(page)
+        out["consent_clicked"] = consent.get("clicked", [])
+        out["consent_removed"] = int(consent.get("removed", 0) or 0)
+    except Exception as e:
+        log.debug("[extract] consent dismisser raised: %s", e)
 
     if paginate:
         try:
