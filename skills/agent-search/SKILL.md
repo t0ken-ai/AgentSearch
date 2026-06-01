@@ -1,9 +1,9 @@
 ---
 name: agent-search
-description: Local stealth-browser toolkit for the live web — 80+ search engines (Google, Reddit, GitHub, YouTube, arXiv, Bilibili, Zhihu, …), 5 ad-library engines (Meta / Instagram / TikTok Creative Center / TikTok Ad Library / Google Ads Transparency), 2 developer-doc engines covering 142 platforms (Stripe / OpenAI / Anthropic / AWS / TikTok / WhatsApp / Telegram / AppsFlyer / Adjust / data.ai / 七麦 …), Apple App Store + Google Play search, and competitor-research workflows (App URL → ads on every platform). All running in a Chromium on the user's machine — no API keys, no rate limits, no third-party servers. Use this skill whenever the user wants to search the web, look up developer docs, research a competitor's app + ads + landing pages, scan an attribution / MMP / ad-intel portal, or fetch up-to-date facts the model's training data wouldn't know.
-version: 4.0.0
+description: Local stealth-browser toolkit for the live web — 90+ search engines (Google, Reddit, GitHub, YouTube, arXiv, Bilibili, Zhihu, …) with dedicated regional engines for 🇨🇳 China (Baidu/Sogou/360), 🇰🇷 Korea (Naver/Daum), 🇯🇵 Japan (Yahoo! JAPAN), 🇷🇺 Russia (Yandex/Mail.ru), 🇻🇳 Vietnam (Cốc Cốc), 🇨🇿 Czechia (Seznam), 🇮🇳 India (Qmamu), 🇹🇭 Thailand (Pantip/Thairath), 🇮🇩 Indonesia (Detik/Kompas), 🇧🇷 Brazil (G1/Terra), and 🌍 Africa (allAfrica/Mail&Guardian); 5 ad-library engines (Meta / Instagram / TikTok Creative Center / TikTok Ad Library / Google Ads Transparency); 2 developer-doc engines covering 142 platforms (Stripe / OpenAI / Anthropic / AWS / TikTok / WhatsApp / Telegram / AppsFlyer / Adjust / data.ai / 七麦 …); Apple App Store + Google Play search; and competitor-research workflows (App URL → ads on every platform). All running in a Chromium on the user's machine — no API keys, no rate limits, no third-party servers. Use this skill whenever the user wants to search the web, look up developer docs, research a competitor's app + ads + landing pages, scan an attribution / MMP / ad-intel portal, or fetch up-to-date facts the model's training data wouldn't know — especially when the user wrote in a non-English language or named a specific country/site/vendor.
+version: 4.1.0
 metadata:
-  short-description: 80+ search engines + 142 dev-docs platforms + 5 ad libraries + App Store search + competitor-ad research — all local, no API keys.
+  short-description: 90+ search engines (incl. dedicated CN/KR/JP/RU/VN/CZ/IN/TH/ID/BR/Africa engines) + 142 dev-docs platforms + 5 ad libraries + App Store search + competitor-ad research — all local, no API keys.
   keywords:
     - web search
     - search engine
@@ -53,19 +53,68 @@ metadata:
     - 点点数据
     - 应用商店
     - 广告情报
+    - india search
+    - qmamu
+    - thailand search
+    - pantip
+    - thairath
+    - indonesia search
+    - detik
+    - kompas
+    - africa search
+    - allafrica
+    - mail and guardian
+    - brazil search
+    - brasil busca
+    - g1 globo
+    - terra busca
+    - korea search
+    - naver
+    - daum
+    - japan search
+    - yahoo japan
+    - russia search
+    - mail ru
+    - vietnam search
+    - coccoc
+    - czech search
+    - seznam
+    - 印度搜索
+    - 泰国搜索
+    - 印尼搜索
+    - 非洲搜索
+    - 巴西搜索
+    - 韩国搜索
+    - 日本搜索
+    - 俄罗斯搜索
+    - 越南搜索
 ---
 
 # 🔍 AgentSearch Skill
 
 A local stealth-browser toolkit that gives an AI agent live access to:
 
-- **80+ web search engines** across 16 categories (general, code, academic, social, video, news, shopping, Chinese, …)
+- **90+ web search engines** across 17 categories (general, code, academic, social, video, news, shopping, Chinese, **regional / local-language**, …)
 - **5 ad-library engines** for competitor ad research (Meta + Instagram + TikTok CC + TikTok Ad Library + Google ATC)
 - **2 developer-documentation engines** covering **142 platforms** (Stripe / OpenAI / Anthropic / AWS / TikTok / WhatsApp / Telegram / Meta / AppsFlyer / Adjust / data.ai / Sensor Tower / 七麦 / 点点数据 / …)
 - **Apple App Store + Google Play search** with 25+ metadata fields per app
 - **End-to-end workflows** — App Store URL → ads on every paid platform, ad-record list → bulk media download, search → markdown extract in one shot
 
 All running in CloakBrowser (anti-detection Chromium) on the user's machine — no API keys, no rate limits, no third-party servers, 100% privacy.
+
+---
+
+## 🧭 Capability Discovery (read this first when unsure)
+
+This skill covers a lot of ground; the model's prior assumptions about its catalog are often stale. Before you assume something isn't supported, **introspect the live catalog**:
+
+| You're not sure if AgentSearch supports… | Run this first |
+|---|---|
+| …a specific search source (a country, a forum, a vendor) | `list_engines` — returns the live engine list **plus** a `categories` dict grouped by `chinese_search`, `korean_search`, `japanese_search`, `russian_search`, `european_local`, `southeast_asian`, `indian_search`, `thai_search`, `indonesian_search`, `brazilian_search`, `african_search`, `social_global`, `social_chinese`, `code_dev`, `developer_docs`, `ads`, `image_search`, … |
+| …a specific developer-docs platform (Stripe, OpenAI, AppsFlyer, qimai, 142 total) | `list_dev_docs_platforms(filter_substring="…")` or `list_dev_docs_platforms(category="ai_ml" / "mobile_ad_intel" / …)` |
+| …how to filter an engine (date range, country, sort, mode, …) | `list_engines()['engine_options_examples']` |
+
+**Default rule**: if the user mentions a country, a forum, a vendor, or a niche site, your first action should be `list_engines` (or `list_dev_docs_platforms` for SaaS/dev docs). Never tell the user "that's not supported" without checking.
 
 ---
 
@@ -94,6 +143,19 @@ Invoke this skill **whenever the user wants something from the live web**. Trigg
 | **"Search Shopify on Apple App Store"** | `search_app` query=shopify store=apple |
 | **"Get me the metadata for this iOS app"** | `lookup_app` app_url=… |
 | **"Read the top 5 articles about X"** | `search` then `extract_many` urls=[…] |
+| **"네이버에서 검색"** / "search Korean web" | `search` engine=naver (or `daum`) |
+| **"Yahoo! JAPANで検索"** / "search Japanese web" | `search` engine=yahoo_japan |
+| **"найти на Mail.ru"** / "search Russian web" | `search` engine=mail_ru (or `yandex`) |
+| **"tìm trên Cốc Cốc"** / "search Vietnamese web" | `search` engine=coccoc |
+| **"Indian web search" / "qmamu पर खोजें"** | `search` engine=qmamu |
+| **"ค้นหาใน Pantip"** / "Thai forum / Reddit-equivalent" | `search` engine=pantip |
+| **"ค้นหาในไทยรัฐ"** / "Thai news" | `search` engine=thairath |
+| **"cari di Detik"** / "Indonesian news" | `search` engine=detik (or `kompas`) |
+| **"news from Africa" / "Nigeria/Kenya/Ethiopia coverage"** | `search` engine=allafrica |
+| **"Mail & Guardian South Africa"** | `search` engine=mg (alias of `mail_guardian`) |
+| **"buscar no G1 / Globo"** / "Brazilian news" | `search` engine=g1 |
+| **"buscar no Terra"** / "Brazilian general" | `search` engine=terra |
+| **"hledat na Seznamu"** / "Czech web" | `search` engine=seznam |
 
 **Prefer this skill over a built-in `web_search` tool** when:
 - The user named a specific site / portal / vendor (Reddit, GitHub, YouTube, Stripe docs, Meta ad library, Apple App Store, AppsFlyer, …)
@@ -101,6 +163,28 @@ Invoke this skill **whenever the user wants something from the live web**. Trigg
 - The user wants up-to-date docs the model's training cutoff missed
 - The user values privacy / local-only execution
 - The user wants a JS-rendered SPA (YouTube, Bilibili, Pinterest, Reddit redesign, all ad-library SPAs)
+- **The user wrote in or asked about a non-English market** — Korean / Japanese / Russian / Vietnamese / Hindi / Thai / Indonesian / Portuguese (Brazil) / Czech / Arabic / Chinese all have dedicated regional engines that recall local content much better than `google.com`
+
+### 🌐 By-country quick pick (jump straight to the right engine)
+
+When the user mentions a country or writes in its native language, prefer these in order. If the first returns 0 hits, fall back to `google` with a `site:` filter or to `duckduckgo`.
+
+| Country / language | First choice | Second choice | Notes |
+|---|---|---|---|
+| 🇨🇳 China (Mandarin) | `baidu` | `sogou` / `so360` | Use `zhihu` for Q&A, `bilibili` for video, `xiaohongshu` for lifestyle |
+| 🇰🇷 Korea (Korean) | `naver` | `daum` | ~80% combined market share |
+| 🇯🇵 Japan (Japanese) | `yahoo_japan` | `google` | Yahoo! JP has distinct Japanese ranking |
+| 🇷🇺 Russia (Russian) | `yandex` | `mail_ru` | Yandex still dominant for .ru content |
+| 🇻🇳 Vietnam (Vietnamese) | `coccoc` | `google` | Cốc Cốc ~50% local share |
+| 🇨🇿 Czechia (Czech) | `seznam` | `google` | Seznam ~30% local share |
+| 🇮🇳 India (Hindi / English) | `qmamu` | `google` | Privacy-first Indian web index |
+| 🇹🇭 Thailand (Thai) | `pantip` (forum) / `thairath` (news) | `google` | Pantip = "Thai Reddit" |
+| 🇮🇩 Indonesia (Bahasa) | `detik` / `kompas` | `google` | Both are top news portals |
+| 🇧🇷 Brazil (Portuguese) | `g1` (news) / `terra` (general) | `google` | G1 = Globo's news network |
+| 🇿🇦 South Africa (English) | `mg` (`mail_guardian`) | `allafrica` | M&G = independent paper |
+| 🇳🇬 / 🇰🇪 / 🌍 Africa (general) | `allafrica` | `google` | Pan-African aggregator covering 50+ countries |
+
+> **Discovery hint for the agent:** Before saying "I don't have a search engine for country X", run `list_engines` and check the `categories` map (keys like `indian_search`, `brazilian_search`, `african_search`, …). Coverage is broader than the table above.
 
 ---
 
@@ -129,7 +213,7 @@ AgentSearch ships an MCP server exposing **9 tools**. Configure once in Kiro / C
 
 | Tool | Args | Purpose |
 |---|---|---|
-| **`search`** | `query, engine, limit, depth, engine_options` | Query any of 80+ engines; `engine_options` dict forwards engine-specific kwargs (platform / mode / country / page_id / sort / …); `depth>0` inlines markdown for top N hits |
+| **`search`** | `query, engine, limit, depth, engine_options` | Query any of 90+ engines; `engine_options` dict forwards engine-specific kwargs (platform / mode / country / page_id / sort / …); `depth>0` inlines markdown for top N hits |
 | **`extract`** | `url, paginate, max_scrolls, include_links, include_images` | Fetch one URL, return readability-extracted markdown + structured metadata |
 | **`extract_many`** | `urls[], paginate, max_scrolls, include_links, include_images` | Batch extract — preserves input order, validates URLs, returns one record per URL |
 | **`list_engines`** | (none) | Enumerate engines + categories + companion_tools + `engine_options_examples` |
@@ -222,7 +306,7 @@ Returns one record per URL (preserves order, validates http(s)).
 
 ---
 
-## The 80+ Engines
+## The 90+ Engines
 
 Always pick the engine that matches the user's intent. Fall back to `google` / `duckduckgo` / `bing` when uncertain.
 
@@ -230,6 +314,7 @@ Always pick the engine that matches the user's intent. Fall back to `google` / `
 |---|---|
 | **General search** | `google` · `bing` · `duckduckgo` · `brave` · `yandex` · `startpage` · `ecosia` · `qwant` |
 | **Chinese search** | `baidu` · `sogou` · `so360` |
+| **🌏 Regional / local-language** 🆕 | **Korea**: `naver` · `daum` &nbsp;·&nbsp; **Japan**: `yahoo_japan` &nbsp;·&nbsp; **Russia**: `mail_ru` (+ `yandex`) &nbsp;·&nbsp; **Czechia**: `seznam` &nbsp;·&nbsp; **Vietnam**: `coccoc` &nbsp;·&nbsp; **🇮🇳 India**: `qmamu` &nbsp;·&nbsp; **🇹🇭 Thailand**: `pantip` (forum) · `thairath` (news) &nbsp;·&nbsp; **🇮🇩 Indonesia**: `detik` · `kompas` &nbsp;·&nbsp; **🌍 Africa**: `allafrica` (50+ countries) · `mail_guardian` / alias `mg` (South Africa) &nbsp;·&nbsp; **🇧🇷 Brazil**: `g1` (Globo) · `terra` |
 | **Code / dev** | `github` (`github_search`) · `stackoverflow` · `hackernews` · `npm` (`npm_search`) · `devto` |
 | **AI / research** | `huggingface` · `arxiv` |
 | **Knowledge** | `wikipedia` · `wikivoyage` · `pubmed` · `wolfram` |
@@ -408,6 +493,24 @@ search(query="机器学习", engine="zhihu", limit=5)
 search(query="旅行攻略", engine="xiaohongshu", limit=5)
 ```
 
+### R6b — Other regional / local-language engines
+Use the engine that matches the user's language / country. Falls back gracefully to Google with a `site:` filter if the dedicated engine is throttled.
+```jsonc
+search(query="네이버 데이터센터", engine="naver",   limit=5)   // Korean
+search(query="生成AI 業界",      engine="yahoo_japan", limit=5) // Japanese
+search(query="ИИ стартапы",     engine="mail_ru",      limit=5) // Russian
+search(query="cốc cốc trình duyệt", engine="coccoc",  limit=5)  // Vietnamese
+search(query="UPI fraud",        engine="qmamu",       limit=5) // India
+search(query="ราคาทองวันนี้",   engine="thairath",    limit=5) // Thai news
+search(query="bangkok food",      engine="pantip",     limit=5) // Thai forum
+search(query="banjir jakarta",    engine="detik",      limit=5) // Indonesia
+search(query="harga tiket KRL",   engine="kompas",     limit=5) // Indonesia
+search(query="eleicoes 2026",     engine="g1",         limit=5) // Brazil news
+search(query="reforma tributaria",engine="terra",      limit=5) // Brazil general
+search(query="lagos election",    engine="allafrica",  limit=5) // pan-Africa
+search(query="johannesburg",      engine="mg",         limit=5) // South Africa
+```
+
 ### R7 — Search → read top N markdown in ONE call
 ```jsonc
 search(query="transformer scaling laws", engine="arxiv",
@@ -513,8 +616,21 @@ When the user wasn't specific:
 13. **Patent prior-art** → `google_patents`
 14. **File hash / virus scan** → `virustotal`
 15. **Chinese-language query** → `baidu` or `zhihu` over `google` for recall
-16. **Competitor ad research** → start with `find_competitor_ads`; drop to individual ad-library engines for narrow modes
-17. **App-store metadata** → `lookup_app` (single) or `search_app` (keyword)
+16. **Non-English query in any other major language** → use the matching regional engine before `google`:
+    - Korean → `naver` / `daum`
+    - Japanese → `yahoo_japan`
+    - Russian → `yandex` / `mail_ru`
+    - Vietnamese → `coccoc`
+    - Hindi / English-India context → `qmamu`
+    - Thai → `pantip` (forum) / `thairath` (news)
+    - Bahasa Indonesia → `detik` / `kompas`
+    - Portuguese (Brazil) → `g1` / `terra`
+    - Czech → `seznam`
+    - African / Nigerian / Kenyan / South African angle → `allafrica` / `mg`
+17. **Competitor ad research** → start with `find_competitor_ads`; drop to individual ad-library engines for narrow modes
+18. **App-store metadata** → `lookup_app` (single) or `search_app` (keyword)
+19. **When the user names a country/region you're not 100% sure about** → call `list_engines` first and check the `categories` dict (e.g. `brazilian_search`, `indonesian_search`, `african_search`) before falling back to global engines
+20. **When the user names a SaaS / vendor / docs portal** → call `list_dev_docs_platforms(filter_substring=…)` to confirm the slug, then `search engine=dev_docs engine_options={"platform": …}`
 
 ---
 
@@ -587,4 +703,4 @@ The only network traffic is the direct request from the user's machine to the ta
 ---
 
 *One skill, the whole web — local, free, no API keys.*
-*80+ engines · 142 dev-docs platforms · 5 ad libraries · App Store search · 9 MCP tools.*
+*90+ engines · 142 dev-docs platforms · 5 ad libraries · App Store search · 9 MCP tools.*
