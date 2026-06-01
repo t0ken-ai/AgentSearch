@@ -41,6 +41,8 @@ _ALIASES: dict[str, tuple[str, str]] = {
     # Generic developer-docs search (40+ preset platforms or arbitrary site=)
     "dev_docs":    ("dev_docs",           "DevDocsEngine"),
     "docs":        ("dev_docs",           "DevDocsEngine"),
+    # Regional / local-language engines — short alias for Mail & Guardian (SA).
+    "mg":          ("mail_guardian",      "MailGuardianEngine"),
 }
 
 

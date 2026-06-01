@@ -1147,7 +1147,12 @@ async def list_engines() -> dict[str, Any]:
         "japanese_search": ["yahoo_japan"],
         "russian_search": ["yandex", "mail_ru"],
         "european_local": ["seznam", "qwant", "ecosia", "startpage"],
-        "southeast_asian": ["coccoc"],
+        "southeast_asian": ["coccoc", "pantip", "thairath", "detik", "kompas"],
+        "indian_search": ["qmamu"],
+        "thai_search": ["pantip", "thairath"],
+        "indonesian_search": ["detik", "kompas"],
+        "african_search": ["allafrica", "mail_guardian", "mg"],
+        "brazilian_search": ["g1", "terra"],
         "image_search": [
             "google_images", "bing_images", "duckduckgo_images",
             "brave_images", "yandex_images",
