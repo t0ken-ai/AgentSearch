@@ -43,6 +43,10 @@ _ALIASES: dict[str, tuple[str, str]] = {
     "docs":        ("dev_docs",           "DevDocsEngine"),
     # Regional / local-language engines — short alias for Mail & Guardian (SA).
     "mg":          ("mail_guardian",      "MailGuardianEngine"),
+    # WeChat official-account (微信公众号) search via Sogou.
+    "wechat":      ("weixin",             "WeixinEngine"),
+    "mp":          ("weixin",             "WeixinEngine"),
+    "gongzhonghao": ("weixin",            "WeixinEngine"),
 }
 
 

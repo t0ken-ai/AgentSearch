@@ -403,6 +403,23 @@ async def search(
                    "stars": ">100"}``
               * ``arxiv``:
                 ``{"category": "cs.AI", "sort_by": "submittedDate"}``
+              * ``weixin`` / ``wechat`` / ``mp`` (微信公众号 via Sogou):
+                ``{"mode": "article"}`` — search articles (default). Pass
+                  an account's name as ``query`` to crawl that author's
+                  recent articles.
+                ``{"author": "老刘投放笔记"}`` — crawl ONLY this 公众号's
+                  articles. Sogou has no per-account filter, so the engine
+                  auto-paginates and keeps just the matching account's rows
+                  (each result carries an ``account`` field).
+                ``{"mode": "account"}`` — find official accounts (name,
+                  WeChat id) to confirm the right author first.
+                ``{"max_pages": 5}`` — auto-paginate to gather more
+                  articles (each page ≈ 10 results; auto-widens to 10 when
+                  an ``author`` filter is set).
+                ``{"resolve_urls": true}`` — resolve Sogou redirectors to
+                  real ``mp.weixin.qq.com`` links (default true).
+                ``{"fetch_content": true}`` — also pull each article's
+                  body text into ``body_text`` / ``body_word_count``.
 
             For engines that don't accept extras, leave it empty.
         fallback: When True and the query yields zero results (or the
@@ -1164,7 +1181,7 @@ async def list_engines() -> dict[str, Any]:
         "knowledge": ["wikipedia", "wikivoyage", "pubmed", "wolfram"],
         "forums": ["reddit", "reddit_subreddit", "quora", "blackhatworld", "producthunt"],
         "social_global": ["twitter", "x", "instagram"],
-        "social_chinese": ["zhihu", "weibo", "xiaohongshu", "douyin", "toutiao", "bilibili"],
+        "social_chinese": ["zhihu", "weibo", "xiaohongshu", "douyin", "toutiao", "bilibili", "weixin", "wechat"],
         "western_news": ["bbc", "guardian", "reuters", "apnews", "cnn", "npr", "aljazeera",
                          "techcrunch", "verge", "arstechnica"],
         "video": ["youtube", "twitch", "netflix", "tiktok"],
