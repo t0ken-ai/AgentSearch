@@ -28,7 +28,7 @@
 
 ```bash
 pip install "cloakbrowser[geoip]>=0.5.7" && pip install -e .
-cloakbrowser login && cloakbrowser update
+# No CloakBrowser login is needed: AgentSearch defaults to its keyless public build.
 
 # Search any of 100+ sites
 agentsearch search "what's new in transformers" --engine google --json
@@ -199,12 +199,20 @@ Meta / Facebook · Stripe · OpenAI · Anthropic · AWS · Google Cloud · Azure
 
 ```bash
 pip install "cloakbrowser[geoip]>=0.5.7"
-cloakbrowser login
-cloakbrowser update
 git clone https://github.com/t0ken-ai/AgentSearch.git
 cd AgentSearch
 pip install -e .
 ```
+
+AgentSearch keeps the CloakBrowser wrapper current while launching its public
+older Chromium from an isolated keyless cache. This avoids the latest
+account build's free-plan limit of one concurrent session. The first browser
+search downloads that public build automatically.
+
+To deliberately use a saved CloakBrowser account key instead, run
+`cloakbrowser login` and set `AGENTSEARCH_CLOAK_MODE=account`. That mode
+defaults to one browser slot; set `AGENTSEARCH_BROWSER_CONCURRENCY` only when
+the account and host both support a higher value.
 
 ### 2. Use it from the CLI
 
@@ -334,12 +342,13 @@ OpenClaw will auto-load the skill and the agent will reach for AgentSearch whene
 | ``find_competitor_ads`` / ``ads_batch`` | Collect cross-platform competitor ads | Creative and advertiser research |
 | ``download_files`` / ``download_images`` / ``download_ad_media`` | Materialize discovered assets | Reports, images, and ad-creative collections |
 
-Browser launches take a host-wide licensed-session lease, so separate MCP
-processes and projects cannot exceed the same CloakBrowser allowance. Servers
-release their browser after each operation by default; a dedicated
-single-client deployment can set ``AGENTSEARCH_RETAIN_BROWSER=1`` to reuse a
-warm session (recycled every ``AGENTSEARCH_RECYCLE_AFTER`` calls). Hacker News,
-npm, PubMed, and arXiv use direct HTTP and consume no Chromium session.
+Browser launches take one of four host-wide capacity slots by default, so
+separate MCP processes and projects cannot exhaust memory with unbounded
+Chromium processes. Servers release their browser after each operation; a
+dedicated single-client deployment can set ``AGENTSEARCH_RETAIN_BROWSER=1``
+to reuse a warm session (recycled every ``AGENTSEARCH_RECYCLE_AFTER`` calls).
+Hacker News, npm, PubMed, and arXiv use direct HTTP and consume no Chromium
+session.
 
 ---
 
@@ -373,7 +382,7 @@ curl -X POST -H 'Content-Type: application/json' \
      localhost:8088/search
 ```
 
-> **Why single-threaded?** CloakBrowser uses Playwright's *sync* API, which binds each browser to its launching thread. A multi-threaded server would cross-thread the Browser. The default latest-binary free license permits one browser session; paid installations can set `AGENTSEARCH_BROWSER_CONCURRENCY` to their licensed limit.
+> **Why is the shared browser single-threaded?** CloakBrowser uses Playwright's *sync* API, which binds each browser to its launching thread. Multi-engine searches still run in isolated worker processes and may use four Chromium sessions concurrently by default.
 >
 > **Network safety**: the server refuses to bind `0.0.0.0` without a bearer token to prevent accidental network exposure.
 
@@ -478,12 +487,15 @@ reasons.
 
 | Environment variable | Default | Purpose |
 |---|---:|---|
+| `AGENTSEARCH_CLOAK_MODE` | `legacy` | `legacy` uses the keyless public build; `account` explicitly uses the saved free/paid key and current build |
+| `AGENTSEARCH_CLOAK_CACHE_DIR` | `~/.cache/agentsearch/cloakbrowser` | Isolated keyless binary cache; must not contain `license.key` |
+| `AGENTSEARCH_CLOAK_BROWSER_VERSION` | wrapper fallback | Optional exact public Chromium version pin |
 | `AGENTSEARCH_AUTO_PROFILES` | `1` | Set `0` to disable automatic disk profiles |
 | `AGENTSEARCH_PROFILES_DIR` | `~/.cache/agentsearch/profiles` | Profile and lock root |
 | `AGENTSEARCH_IDENTITY_DIR` | `~/.config/agentsearch` | Private install identity root |
 | `AGENTSEARCH_CACHE` | `1` | Set `0` to disable query caching |
 | `AGENTSEARCH_CACHE_PATH` | `~/.cache/agentsearch/search-cache.sqlite3` | SQLite cache path |
-| `AGENTSEARCH_BROWSER_CONCURRENCY` | `1` | Licensed simultaneous Chromium sessions |
+| `AGENTSEARCH_BROWSER_CONCURRENCY` | `4` (`legacy`), `1` (`account`) | Host-wide simultaneous Chromium sessions |
 | `AGENTSEARCH_BROWSER_SLOT_DIR` | `~/.cache/agentsearch/browser-slots` | Cross-process session-lock root |
 | `AGENTSEARCH_RETAIN_BROWSER` | `0` | Set `1` only for a dedicated client that may retain an idle session |
 | `AGENTSEARCH_MAX_PARALLEL` | `8` | Maximum total API/browser worker processes |
@@ -582,8 +594,8 @@ agentsearch search "llama" --engine huggingface --json
 <summary><b>⚡ Multi-engine fan-out (parallel + URL-deduped)</b></summary>
 
 ```bash
-# Direct HTTP engines run concurrently. Browser engines honor the licensed
-# AGENTSEARCH_BROWSER_CONCURRENCY session budget (default 1).
+# Direct HTTP engines run concurrently. Browser engines honor the host-wide
+# AGENTSEARCH_BROWSER_CONCURRENCY capacity budget (default 4 in legacy mode).
 # URLs surfaced by multiple engines float to the top of the merged feed.
 agentsearch search-many "open source MCP web search" \
     --engines duckduckgo,hackernews,github --limit 5 --merged --json

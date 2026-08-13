@@ -165,9 +165,9 @@ class BrowserPool:
             yield browser
         finally:
             if not RETAIN_BROWSER:
-                # Multiple HTTP/MCP processes share the same host-wide
-                # CloakBrowser license slots. Release the actual browser, not
-                # only the file lock, as soon as this request is complete.
+                # Multiple HTTP/MCP processes share the same host-wide browser
+                # slots. Release the actual Chromium process, not only the file
+                # lock, as soon as this request is complete.
                 with self._lock:
                     if self._browser is browser:
                         self._close_shared()

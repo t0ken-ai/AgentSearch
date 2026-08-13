@@ -46,7 +46,7 @@ description, license, weekly/monthly downloads, links, publisher, keywords,
 and dependents — so we don't need any secondary requests.
 
 The endpoint returns ``application/json`` and has no anti-bot challenge, so
-the adapter uses direct HTTP. This avoids consuming a licensed Chromium
+the adapter uses direct HTTP. This avoids consuming a Chromium
 session and lets API engines run alongside a browser search.
 
 Each :class:`SearchResult` carries the structured fields (``version``,

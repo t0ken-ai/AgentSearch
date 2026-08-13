@@ -38,7 +38,7 @@ def profiles_dir() -> Path:
 
 
 def browser_slots_dir() -> Path:
-    """Return the host-wide lock root for licensed Chromium sessions."""
+    """Return the host-wide lock root for concurrent Chromium sessions."""
     return Path(
         os.environ.get(
             "AGENTSEARCH_BROWSER_SLOT_DIR",
@@ -210,7 +210,7 @@ class ProfileProxyMismatchError(RuntimeError):
 
 
 class BrowserSessionBusyError(RuntimeError):
-    """Raised when every licensed browser slot stays occupied."""
+    """Raised when every configured host browser slot stays occupied."""
 
 
 def bind_profile_to_proxy(profile: Path, proxy_affinity: str) -> None:
@@ -239,13 +239,12 @@ def bind_profile_to_proxy(profile: Path, proxy_affinity: str) -> None:
 
 
 class BrowserSessionLease:
-    """Hold one host-wide CloakBrowser license slot for a browser lifetime.
+    """Hold one host-wide CloakBrowser capacity slot for a browser lifetime.
 
     MCP clients usually create separate server processes per project.  A
-    process-local semaphore therefore cannot enforce CloakBrowser's global
-    session allowance.  Advisory file locks survive crashes safely and let
-    paid installations expose more slots through the existing concurrency
-    setting without sharing browser objects across Playwright processes.
+    process-local semaphore therefore cannot bound their combined CPU and
+    memory use. Advisory file locks survive crashes safely and expose a shared
+    concurrency setting without sharing Playwright objects across processes.
     """
 
     def __init__(
@@ -308,7 +307,7 @@ class BrowserSessionLease:
                 raise BrowserSessionBusyError(
                     "all CloakBrowser session slots are in use; wait for the "
                     "active MCP/search operation to finish or raise "
-                    "AGENTSEARCH_BROWSER_CONCURRENCY to the licensed limit"
+                    "AGENTSEARCH_BROWSER_CONCURRENCY if the host has capacity"
                 )
             time.sleep(0.1)
 

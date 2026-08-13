@@ -379,7 +379,7 @@ def cmd_search(args):
 
             # Search and result pages often belong to unrelated domains. End
             # the SERP session first so every destination gets its own stable
-            # identity and the free license never sees two simultaneous runs.
+            # identity instead of carrying cross-site state into extraction.
             if browser is not None:
                 browser.close()
                 browser = None
@@ -817,14 +817,14 @@ def cmd_ads_batch(args):
     workers = max(1, int(args.workers or 1))
     from .policies import browser_concurrency_limit
 
-    licensed_workers = browser_concurrency_limit()
-    if workers > licensed_workers:
+    browser_workers = browser_concurrency_limit()
+    if workers > browser_workers:
         print(
-            f"WARNING: browser workers clamped {workers} -> {licensed_workers} "
-            "by AGENTSEARCH_BROWSER_CONCURRENCY/licensed session budget.",
+            f"WARNING: browser workers clamped {workers} -> {browser_workers} "
+            "by the AGENTSEARCH_BROWSER_CONCURRENCY host-capacity budget.",
             file=sys.stderr,
         )
-        workers = licensed_workers
+        workers = browser_workers
     if workers > 1 and len(proxy_pool_urls) <= 1:
         print(
             f"WARNING: --workers={workers} with only "

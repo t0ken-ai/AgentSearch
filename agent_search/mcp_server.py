@@ -36,7 +36,7 @@ Cline, Continue, Kiro, Roo Code, Zed, ...):
   * ``download_images``         — materialize image results to disk
 
 By default the server releases CloakBrowser after each tool operation so
-separate MCP processes can share a one-session license. Dedicated
+separate MCP processes share the host's browser capacity fairly. Dedicated
 single-client deployments can set ``AGENTSEARCH_RETAIN_BROWSER=1`` to keep a
 warm browser, which is still recycled lazily after a configurable number of
 calls (the page state otherwise drifts as cookies and JS state accumulate).
@@ -126,8 +126,8 @@ def _browser_operation_lock() -> asyncio.Lock:
     """Return one browser-work lock per MCP event loop.
 
     The dedicated executor protects Playwright's thread affinity. This second
-    lock protects CloakBrowser's licensed session budget while a subprocess
-    fan-out temporarily owns the browser slot.
+    lock protects the host-wide browser budget while a subprocess fan-out
+    temporarily owns the browser slots.
     """
     loop = asyncio.get_running_loop()
     with _BROWSER_OPERATION_LOCKS_GUARD:
@@ -280,8 +280,8 @@ class BrowserPool:
                 proxy=_resolve_default_proxy(),
             )
             if self._browser is not None and self._launch_key != requested.launch_key:
-                # One latest-binary session is available on the free license.
-                # Switch serially when a request needs another site identity.
+                # One pooled browser cannot safely carry two site identities.
+                # Switch when the next request belongs to another family.
                 self._close_current()
             if self._browser is None:
                 self._start(engine_name=engine_name, target_url=target_url)
@@ -297,7 +297,7 @@ _pool = BrowserPool()
 
 
 def _fanout_uses_browser(engine_names: list[str]) -> bool:
-    """Return whether a fan-out needs the shared licensed browser slot."""
+    """Return whether a fan-out needs shared host browser capacity."""
     for engine_name in engine_names:
         try:
             if engine_uses_browser(_get_engine(engine_name)):
@@ -700,8 +700,8 @@ async def search(
     results = [result_to_dict(r) for r in raw]
 
     # Fallback owns short-lived worker browsers. Release the shared pool and
-    # hold the global operation slot until the winner cancels its siblings;
-    # otherwise a retained primary session can exhaust the free license.
+    # hold the operation slot until the winner cancels its siblings so one MCP
+    # process cannot exceed its intended browser budget with a retained pool.
     if fallback and not results:
         from .health import DEFAULT_CHAIN, search_with_fallback
 
@@ -1803,9 +1803,9 @@ async def search_many(
       "scholarly search across arxiv + huggingface + semanticscholar"
 
     Direct-HTTP engines run in parallel. Browser engines run in isolated
-    workers but obey ``AGENTSEARCH_BROWSER_CONCURRENCY`` (default 1 for the
-    free CloakBrowser license). The shared MCP browser is released before
-    fan-out and reopened lazily afterward.
+    workers but obey ``AGENTSEARCH_BROWSER_CONCURRENCY`` (default 4 in keyless
+    legacy mode). The shared MCP browser is released before fan-out and
+    reopened lazily afterward.
 
     Args:
         query: Search query string.

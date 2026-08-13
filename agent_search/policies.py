@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass
+from pathlib import Path
 
 
 @dataclass(frozen=True)
@@ -266,27 +267,74 @@ def engine_uses_browser(engine_cls: type) -> bool:
     return getattr(engine_cls, "transport", "browser") != "http"
 
 
-def browser_concurrency_limit() -> int:
-    """Return the licensed browser-session budget used by fan-out workers.
+def cloakbrowser_mode() -> str:
+    """Return the binary entitlement mode used for AgentSearch launches.
 
-    CloakBrowser's current free key permits one latest-binary session.  Paid
-    installations can raise this explicitly without changing code.
+    ``legacy`` is deliberately the default: CloakBrowser's public older
+    binary needs no account key and therefore does not inherit the latest
+    binary's one-session free-plan limit. ``account`` is an explicit opt-in
+    for operators who want their saved free/paid key and current binary.
     """
-    raw = os.environ.get("AGENTSEARCH_BROWSER_CONCURRENCY", "1")
+    mode = os.environ.get("AGENTSEARCH_CLOAK_MODE", "legacy").strip().lower()
+    if mode not in {"legacy", "account"}:
+        raise ValueError(
+            "AGENTSEARCH_CLOAK_MODE must be 'legacy' or 'account', "
+            f"got {mode!r}"
+        )
+    return mode
+
+
+def legacy_cloakbrowser_cache_dir() -> Path:
+    """Return the keyless cache isolated from CloakBrowser account state.
+
+    CloakBrowser resolves a saved key from the same directory that stores its
+    binaries. A separate cache is therefore required: passing
+    ``license_key=None`` alone still reads ``~/.cloakbrowser/license.key`` and
+    silently selects the latest account build.
+    """
+    return Path(
+        os.environ.get(
+            "AGENTSEARCH_CLOAK_CACHE_DIR",
+            str(Path.home() / ".cache" / "agentsearch" / "cloakbrowser"),
+        )
+    ).expanduser()
+
+
+def legacy_cloakbrowser_version() -> str | None:
+    """Return an optional public-binary pin for reproducible deployments.
+
+    Unset means "the public fallback bundled with the installed wrapper" so
+    upgrading the Python dependency can pick up a refreshed free build. The
+    AgentSearch-prefixed setting avoids inheriting an account-wide
+    ``CLOAKBROWSER_VERSION`` that may point at a licensed build.
+    """
+    value = os.environ.get("AGENTSEARCH_CLOAK_BROWSER_VERSION", "").strip()
+    return value or None
+
+
+def browser_concurrency_limit() -> int:
+    """Return the host browser-session budget used by fan-out workers.
+
+    The keyless public binary has no account session cap, but Chromium is
+    memory-heavy, so four is a conservative cross-project default. Account
+    mode remains at one unless the operator explicitly matches a paid plan's
+    allowance.
+    """
+    default = "4" if cloakbrowser_mode() == "legacy" else "1"
+    raw = os.environ.get("AGENTSEARCH_BROWSER_CONCURRENCY", default)
     try:
         return max(1, int(raw))
     except ValueError:
-        return 1
+        return int(default)
 
 
 def retain_browser_sessions() -> bool:
     """Return whether long-running servers may keep an idle browser open.
 
     Codex and other MCP hosts commonly start one server process per project or
-    conversation.  Retaining the free license's only session in any one of
-    those idle processes would starve every other client, so cross-project
-    installations release by default.  A dedicated single-client deployment
-    can opt back into warm-session reuse explicitly.
+    conversation. Retaining idle Chromium processes wastes the shared host
+    capacity and memory, so cross-project installations release by default. A
+    dedicated single-client deployment can opt into warm-session reuse.
     """
     return os.environ.get("AGENTSEARCH_RETAIN_BROWSER", "0") == "1"
 

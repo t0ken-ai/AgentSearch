@@ -7,12 +7,12 @@ A typical agent research turn needs hits from several complementary engines
 each — a ~10-15s tax for three engines.
 
 This module runs engines in isolated worker processes. Direct-HTTP adapters
-run concurrently; browser workers also obey the configured licensed-session
-budget (one by default). Each browser worker owns its process, which preserves
-Playwright affinity and lets the supervisor terminate a stuck browser at the
-requested deadline. Thread pools cannot provide that guarantee: Python cannot
-cancel a running thread, and ``ThreadPoolExecutor`` waits for its workers
-during shutdown.
+run concurrently; browser workers also obey the configured host-capacity
+budget (four by default in keyless mode). Each browser worker owns its process,
+which preserves Playwright affinity and lets the supervisor terminate a stuck
+browser at the requested deadline. Thread pools cannot provide that guarantee:
+Python cannot cancel a running thread, and ``ThreadPoolExecutor`` waits for its
+workers during shutdown.
 """
 
 from __future__ import annotations
@@ -764,8 +764,8 @@ def race_search(
     """Hedge fallbacks and stop remaining workers on the first useful result.
 
     The next engine starts only after ``hedge_delay_s`` while the previous one
-    is still pending. Browser launches still honor the licensed session limit;
-    direct HTTP adapters can race without consuming that scarce resource.
+    is still pending. Browser launches still honor the host capacity limit;
+    direct HTTP adapters can race without consuming Chromium resources.
     """
     unique = list(dict.fromkeys(engines))
     if not unique:

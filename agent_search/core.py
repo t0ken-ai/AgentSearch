@@ -3,7 +3,9 @@
 import logging
 import os
 import random
+import threading
 import time
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -16,8 +18,71 @@ from .identity import (
     profiles_dir,
     resolve_identity,
 )
+from .policies import (
+    cloakbrowser_mode,
+    legacy_cloakbrowser_cache_dir,
+    legacy_cloakbrowser_version,
+)
 
 log = logging.getLogger(__name__)
+
+
+_CLOAK_ENV_LOCK = threading.Lock()
+_MISSING_ENV = object()
+
+
+@contextmanager
+def _cloakbrowser_launch_options():
+    """Isolate keyless launches from machine-wide CloakBrowser account state.
+
+    The wrapper treats an empty/omitted ``license_key`` as "look in the env
+    and saved key file", so a normal API argument cannot force its public
+    fallback. Legacy mode temporarily points the wrapper at a dedicated cache
+    and removes account-level overrides only for the synchronous launch. The
+    lock protects those process-global environment changes; browsers run
+    concurrently after their child process has inherited the keyless state.
+    """
+    if cloakbrowser_mode() == "account":
+        yield {}
+        return
+
+    cache_dir = legacy_cloakbrowser_cache_dir()
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    if (cache_dir / "license.key").exists():
+        raise RuntimeError(
+            "AgentSearch legacy CloakBrowser cache contains a license.key; "
+            "remove it or set AGENTSEARCH_CLOAK_CACHE_DIR to a keyless directory"
+        )
+
+    controlled = (
+        "CLOAKBROWSER_BINARY_PATH",
+        "CLOAKBROWSER_CACHE_DIR",
+        "CLOAKBROWSER_DOWNLOAD_URL",
+        "CLOAKBROWSER_LICENSE_KEY",
+        "CLOAKBROWSER_RELEASE_CHANNEL",
+        "CLOAKBROWSER_VERSION",
+    )
+    with _CLOAK_ENV_LOCK:
+        previous = {
+            name: os.environ.get(name, _MISSING_ENV)
+            for name in controlled
+        }
+        try:
+            # **Important:** every account-wide selector must be hidden here.
+            # Keeping even the saved-key cache visible makes the wrapper ignore
+            # a public version pin and select the latest one-session build.
+            for name in controlled:
+                os.environ.pop(name, None)
+            os.environ["CLOAKBROWSER_CACHE_DIR"] = str(cache_dir)
+            version = legacy_cloakbrowser_version()
+            options = {"browser_version": version} if version else {}
+            yield options
+        finally:
+            for name, value in previous.items():
+                if value is _MISSING_ENV:
+                    os.environ.pop(name, None)
+                else:
+                    os.environ[name] = value  # type: ignore[assignment]
 
 
 def environment_proxy_url() -> str | None:
@@ -70,8 +135,8 @@ class BrowserConfig:
     # A persistent Chromium directory cannot be opened concurrently. The
     # lease is held until browser.close() and bounds how long callers wait.
     profile_lock_timeout_s: float = 10.0
-    # CloakBrowser licenses cap sessions across processes, not just inside one
-    # MCP server. This bounds how long a launch waits for a host-wide slot.
+    # Browsers from separate projects share host memory/CPU capacity. This
+    # bounds how long a launch waits for one configured cross-process slot.
     browser_lock_timeout_s: float = 45.0
     # Optional proxy rotation pool. When ``proxy`` is None and this is set,
     # ``launch()`` calls ``proxy_pool.next()`` to pick a proxy URL per
@@ -120,7 +185,7 @@ def _attach_lifetime_leases(resource, leases: list, identity):
         try:
             return original_close(*args, **kwargs)
         finally:
-            # Profile ownership is narrower than the licensed browser slot and
+            # Profile ownership is narrower than the host browser slot and
             # is released first, mirroring reverse acquisition order.
             for lease in leases:
                 lease.release()
@@ -183,7 +248,7 @@ def launch(config: BrowserConfig | None = None):
         str(identity.profile_dir) if identity.profile_dir else None
     )
     if user_data_dir:
-        # Prepare storage before occupying a scarce licensed session slot.
+        # Prepare storage before occupying a host browser session slot.
         Path(user_data_dir).mkdir(parents=True, exist_ok=True)
     session_lease = BrowserSessionLease(
         timeout_s=cfg.browser_lock_timeout_s
@@ -207,10 +272,12 @@ def launch(config: BrowserConfig | None = None):
             # Verify affinity while holding the same exclusive lease as
             # Chromium; otherwise two first launches could race the marker.
             bind_profile_to_proxy(Path(user_data_dir), identity.proxy_affinity)
-            context = cloakbrowser.launch_persistent_context(
-                user_data_dir=user_data_dir,
-                **common,
-            )
+            with _cloakbrowser_launch_options() as cloak_options:
+                context = cloakbrowser.launch_persistent_context(
+                    user_data_dir=user_data_dir,
+                    **common,
+                    **cloak_options,
+                )
         except BaseException:
             if profile_lease is not None:
                 profile_lease.release()
@@ -231,7 +298,8 @@ def launch(config: BrowserConfig | None = None):
         use_geoip,
     )
     try:
-        browser = cloakbrowser.launch(**common)
+        with _cloakbrowser_launch_options() as cloak_options:
+            browser = cloakbrowser.launch(**common, **cloak_options)
     except BaseException:
         session_lease.release()
         raise

@@ -27,6 +27,7 @@ class CorePolicyTests(unittest.TestCase):
                 "AGENTSEARCH_PROFILES_DIR": f"{self.tmp.name}/profiles",
                 "AGENTSEARCH_BROWSER_SLOT_DIR": f"{self.tmp.name}/browser-slots",
                 "AGENTSEARCH_BROWSER_CONCURRENCY": "2",
+                "AGENTSEARCH_CLOAK_CACHE_DIR": f"{self.tmp.name}/cloakbrowser",
             },
         )
         self.env.start()
@@ -53,6 +54,81 @@ class CorePolicyTests(unittest.TestCase):
         self.assertTrue(calls[0]["args"][0].startswith("--fingerprint="))
         first.close()
         second.close()
+
+    def test_legacy_launch_hides_account_selectors_and_restores_them(self) -> None:
+        observed = {}
+
+        def fake_launch(**kwargs):
+            observed.update(
+                {
+                    "kwargs": kwargs,
+                    "cache": os.environ.get("CLOAKBROWSER_CACHE_DIR"),
+                    "key": os.environ.get("CLOAKBROWSER_LICENSE_KEY"),
+                    "binary": os.environ.get("CLOAKBROWSER_BINARY_PATH"),
+                    "version": os.environ.get("CLOAKBROWSER_VERSION"),
+                }
+            )
+            return FakeBrowser()
+
+        with patch.dict(
+            os.environ,
+            {
+                "AGENTSEARCH_CLOAK_MODE": "legacy",
+                "AGENTSEARCH_CLOAK_BROWSER_VERSION": "145.0.7632.109.2",
+                "CLOAKBROWSER_LICENSE_KEY": "cb_saved_account_key",
+                "CLOAKBROWSER_BINARY_PATH": "/tmp/current-account-build",
+                "CLOAKBROWSER_VERSION": "150.0.7871.114.3",
+            },
+        ), patch(
+            "agent_search.core.cloakbrowser.launch",
+            side_effect=fake_launch,
+        ):
+            browser = launch(BrowserConfig(engine_name="google"))
+            browser.close()
+            self.assertEqual(
+                os.environ["CLOAKBROWSER_LICENSE_KEY"],
+                "cb_saved_account_key",
+            )
+            self.assertEqual(
+                os.environ["CLOAKBROWSER_BINARY_PATH"],
+                "/tmp/current-account-build",
+            )
+
+        self.assertEqual(
+            observed["cache"],
+            f"{self.tmp.name}/cloakbrowser",
+        )
+        self.assertIsNone(observed["key"])
+        self.assertIsNone(observed["binary"])
+        self.assertIsNone(observed["version"])
+        self.assertEqual(
+            observed["kwargs"]["browser_version"],
+            "145.0.7632.109.2",
+        )
+
+    def test_account_launch_preserves_saved_key_path(self) -> None:
+        observed = {}
+
+        def fake_launch(**kwargs):
+            observed["key"] = os.environ.get("CLOAKBROWSER_LICENSE_KEY")
+            observed["kwargs"] = kwargs
+            return FakeBrowser()
+
+        with patch.dict(
+            os.environ,
+            {
+                "AGENTSEARCH_CLOAK_MODE": "account",
+                "CLOAKBROWSER_LICENSE_KEY": "cb_explicit_account_key",
+            },
+        ), patch(
+            "agent_search.core.cloakbrowser.launch",
+            side_effect=fake_launch,
+        ):
+            browser = launch(BrowserConfig(engine_name="google"))
+            browser.close()
+
+        self.assertEqual(observed["key"], "cb_explicit_account_key")
+        self.assertNotIn("browser_version", observed["kwargs"])
 
     def test_direct_geo_defaults_can_be_explicitly_pinned(self) -> None:
         with patch.dict(

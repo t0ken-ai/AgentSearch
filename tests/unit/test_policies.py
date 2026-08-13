@@ -6,6 +6,8 @@ from unittest.mock import patch
 from agent_search.engines.hackernews import HackerNewsEngine
 from agent_search.engines.pubmed import PubMedEngine
 from agent_search.policies import (
+    browser_concurrency_limit,
+    cloakbrowser_mode,
     engine_uses_browser,
     identity_policy,
     max_parallelism,
@@ -31,6 +33,23 @@ class PolicyTests(unittest.TestCase):
     def test_parallelism_has_a_global_ceiling(self) -> None:
         with patch.dict("os.environ", {"AGENTSEARCH_MAX_PARALLEL": "3"}):
             self.assertEqual(max_parallelism(99), 3)
+
+    def test_keyless_mode_defaults_to_four_browser_slots(self) -> None:
+        with patch.dict(
+            "os.environ",
+            {"AGENTSEARCH_CLOAK_MODE": "legacy"},
+            clear=True,
+        ):
+            self.assertEqual(cloakbrowser_mode(), "legacy")
+            self.assertEqual(browser_concurrency_limit(), 4)
+
+    def test_account_mode_defaults_to_one_browser_slot(self) -> None:
+        with patch.dict(
+            "os.environ",
+            {"AGENTSEARCH_CLOAK_MODE": "account"},
+            clear=True,
+        ):
+            self.assertEqual(browser_concurrency_limit(), 1)
 
     def test_idle_browser_retention_requires_explicit_opt_in(self) -> None:
         with patch.dict("os.environ", {"AGENTSEARCH_RETAIN_BROWSER": "0"}):

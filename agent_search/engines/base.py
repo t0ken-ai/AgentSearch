@@ -83,7 +83,7 @@ class HttpEngine(BaseEngine):
 
     Keeping these adapters on a requests session avoids browser startup and
     preserves proxy support. Browser-only fallbacks should live in a separate
-    adapter so one API call cannot unexpectedly consume a licensed session.
+    adapter so one API call cannot unexpectedly consume a browser slot.
     """
 
     transport = "http"
