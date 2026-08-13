@@ -146,9 +146,9 @@ def cmd_login(args):
 
     The browser stays open until the user closes the window OR presses Enter
     in this terminal. Cookies / localStorage / IndexedDB are persisted to
-    ``~/.cache/agentsearch/profiles/<name>/`` and automatically picked up by
-    later ``search`` / ``extract`` / ``search-many`` calls that pass
-    ``--profile <name>``.
+    ``~/.cache/agentsearch/profiles/<name>/``. Known account-heavy engines
+    select that profile automatically; custom sites can pass ``--profile``
+    on later search/extract calls.
     """
     from .core import profile_path
 
@@ -173,14 +173,6 @@ def cmd_login(args):
         "douyin":      "https://www.douyin.com/",
     }
 
-    profile_name = args.profile or args.site
-    try:
-        prof_dir = profile_path(profile_name)
-    except ValueError as e:
-        print(f"Error: {e}", file=sys.stderr)
-        return 2
-    fresh = not prof_dir.exists()
-
     url = args.url or DEFAULT_LOGIN_URLS.get(args.site.lower())
     if not url:
         print(
@@ -190,11 +182,61 @@ def cmd_login(args):
         )
         return 2
 
+    proxy_spec = getattr(args, "proxy", None)
+    if proxy_spec and (
+        proxy_spec == "pool"
+        or proxy_spec.startswith("pool:")
+        or proxy_spec.startswith("file:")
+    ):
+        print(
+            "Error: login profiles require a fixed proxy URL. A rotating "
+            "pool selects a different identity slot on later searches; pass "
+            "the exact http(s)/socks proxy used for this account.",
+            file=sys.stderr,
+        )
+        return 2
+
+    from .core import resolve_config_proxy
+    from .identity import resolve_identity
+
+    cfg = BrowserConfig(
+        headless=False,
+        engine_name=args.site,
+        target_url=url,
+    )
+    if proxy_spec:
+        from .proxy import apply_proxy_spec_to_config
+
+        apply_proxy_spec_to_config(cfg, proxy_spec)
+    effective_proxy = resolve_config_proxy(cfg)
+    cfg.proxy = effective_proxy
+    cfg.proxy_pool = None
+
+    profile_name = args.profile or args.site
+    if args.profile:
+        try:
+            prof_dir = profile_path(profile_name)
+        except ValueError as e:
+            print(f"Error: {e}", file=sys.stderr)
+            return 2
+    else:
+        try:
+            automatic = resolve_identity(
+                engine_name=args.site,
+                target_url=url,
+                proxy=effective_proxy,
+            )
+            prof_dir = automatic.profile_dir or profile_path(profile_name)
+        except ValueError as e:
+            print(f"Error: {e}", file=sys.stderr)
+            return 2
+    cfg.user_data_dir = str(prof_dir)
+    fresh = not prof_dir.exists()
+
     print(f"📂 Profile: {prof_dir}{' (new)' if fresh else ' (existing — re-using)'}")
     print(f"🌐 Opening: {url}")
     print(f"🪟 Window will stay open. Log in, then come back here and press Enter to save and close.")
 
-    cfg = BrowserConfig(headless=False, user_data_dir=str(prof_dir))
     browser = launch(cfg)
     try:
         page = new_page(browser)
@@ -214,7 +256,13 @@ def cmd_login(args):
             pass
 
     print(f"\n✅ Profile saved to {prof_dir}")
-    print(f"   Use it next time:  agentsearch search ... --profile {profile_name}")
+    if args.profile:
+        usage = f"--profile {profile_name}"
+    else:
+        usage = f"--engine {args.site}"
+    if getattr(args, "proxy", None):
+        usage += " --proxy <same-fixed-proxy>"
+    print(f"   Use it next time:  agentsearch search ... {usage}")
     return 0
 
 
@@ -257,28 +305,71 @@ def cmd_search(args):
             print()
         return 0
 
-    # Standard single-engine path (also records to the health log so the
-    # fallback path has signal to work with on later calls).
-    from .health import HealthLog
+    # Standard path. Public API adapters skip Chromium; browser adapters get
+    # a stable site-family identity and automatic profile policy.
+    from .core import resolve_config_proxy
+    from .policies import engine_uses_browser
+    from .runtime import execute_search, get_cached_search
 
-    health = HealthLog()
+    engine_cls = _get_engine(args.engine)
     cfg = BrowserConfig(
         headless=not args.visible,
         user_data_dir=_resolve_profile_dir(getattr(args, "profile", None)),
+        engine_name=getattr(engine_cls, "name", args.engine),
     )
     if getattr(args, "proxy", None):
         from .proxy import apply_proxy_spec_to_config
         apply_proxy_spec_to_config(cfg, args.proxy)
-    browser = launch(cfg)
-    started = time.time()
+    effective_proxy = resolve_config_proxy(cfg)
+    cfg.proxy = effective_proxy
+    cfg.proxy_pool = None
+    browser = None
     results = []
-    ok = False
     try:
-        page = new_page(browser)
-        engine_cls = _get_engine(args.engine)
-        engine = engine_cls(page)
-        results = engine.search(args.query, limit=args.limit)
-        ok = bool(results)
+        if engine_uses_browser(engine_cls):
+            from .identity import resolve_identity
+
+            identity = resolve_identity(
+                engine_name=getattr(engine_cls, "name", args.engine),
+                proxy=effective_proxy,
+                explicit_profile=cfg.user_data_dir,
+            )
+            partition = identity.cache_partition
+            results = get_cached_search(
+                getattr(engine_cls, "name", args.engine),
+                args.query,
+                limit=args.limit,
+                options=None,
+                cache_partition=partition,
+                transport="browser",
+            )
+            if results is None:
+                browser = launch(cfg)
+                engine = engine_cls(new_page(browser))
+                results = execute_search(
+                    engine,
+                    args.query,
+                    limit=args.limit,
+                    engine_name=getattr(engine_cls, "name", args.engine),
+                    cache_partition=partition,
+                )
+        else:
+            engine = engine_cls(None)
+            if hasattr(engine, "set_proxy"):
+                engine.set_proxy(effective_proxy)
+            from .identity import http_cache_partition
+
+            partition = http_cache_partition(
+                getattr(engine_cls, "name", args.engine),
+                effective_proxy,
+            )
+            results = execute_search(
+                engine,
+                args.query,
+                limit=args.limit,
+                engine_name=getattr(engine_cls, "name", args.engine),
+                cache_partition=partition,
+            )
 
         # Optional deep-fetch: pull the markdown body for the top N URLs
         # so the agent doesn't need a follow-up `extract` round-trip.
@@ -286,11 +377,36 @@ def cmd_search(args):
         if results and depth > 0:
             from .extract import extract_page
 
+            # Search and result pages often belong to unrelated domains. End
+            # the SERP session first so every destination gets its own stable
+            # identity and the free license never sees two simultaneous runs.
+            if browser is not None:
+                browser.close()
+                browser = None
             top = [r for r in results[:depth] if r.url]
             for r in top:
                 ep = None
+                extract_browser = None
                 try:
-                    ep = new_page(browser)
+                    from urllib.parse import urlparse
+                    from .policies import identity_policy
+
+                    target_host = urlparse(r.url).hostname or ""
+                    same_family = (
+                        identity_policy(None, target_host).key
+                        == identity_policy(
+                            getattr(engine_cls, "name", args.engine)
+                        ).key
+                    )
+                    extract_browser = launch(BrowserConfig(
+                        headless=not args.visible,
+                        target_url=r.url,
+                        proxy=effective_proxy,
+                        user_data_dir=(
+                            cfg.user_data_dir if same_family else None
+                        ),
+                    ))
+                    ep = new_page(extract_browser)
                     rec = extract_page(
                         ep,
                         url=r.url,
@@ -317,6 +433,11 @@ def cmd_search(args):
                             ep.close()
                         except Exception:
                             pass
+                    if extract_browser is not None:
+                        try:
+                            extract_browser.close()
+                        except Exception:
+                            pass
 
         if args.json:
             print(json.dumps(
@@ -338,17 +459,18 @@ def cmd_search(args):
         if not results:
             print("No results found.", file=sys.stderr)
             return 1
+    except Exception as exc:
+        from .execution import SearchDeadlineExceeded
+
+        if not isinstance(exc, SearchDeadlineExceeded):
+            raise
+        if args.json:
+            print("[]")
+        print(f"Search deadline reached: {exc}", file=sys.stderr)
+        return 1
     finally:
-        try:
-            health.record(
-                args.engine,
-                ok=ok,
-                count=len(results) if results else 0,
-                ms=int((time.time() - started) * 1000),
-            )
-        except Exception:
-            pass
-        browser.close()
+        if browser is not None:
+            browser.close()
     return 0
 
 
@@ -359,6 +481,7 @@ def cmd_extract(args):
     cfg = BrowserConfig(
         headless=not args.visible,
         user_data_dir=_resolve_profile_dir(getattr(args, "profile", None)),
+        target_url=args.url,
     )
     if getattr(args, "proxy", None):
         from .proxy import apply_proxy_spec_to_config
@@ -692,6 +815,16 @@ def cmd_ads_batch(args):
         return p
 
     workers = max(1, int(args.workers or 1))
+    from .policies import browser_concurrency_limit
+
+    licensed_workers = browser_concurrency_limit()
+    if workers > licensed_workers:
+        print(
+            f"WARNING: browser workers clamped {workers} -> {licensed_workers} "
+            "by AGENTSEARCH_BROWSER_CONCURRENCY/licensed session budget.",
+            file=sys.stderr,
+        )
+        workers = licensed_workers
     if workers > 1 and len(proxy_pool_urls) <= 1:
         print(
             f"WARNING: --workers={workers} with only "
@@ -923,7 +1056,7 @@ def cmd_ads_by_app(args):
         try:
             from .core import launch as _launch, new_page as _np
             from .engines.meta_ad_library import MetaAdLibraryEngine
-            _b = _launch(_ad_browser_cfg(proxy_url))
+            _b = _launch(_ad_browser_cfg(proxy_url, "meta_ad_library"))
             try:
                 _p = _np(_b)
                 _e = MetaAdLibraryEngine(_p)
@@ -1162,12 +1295,18 @@ def _run_meta_like_query(engine_name: str, query: str, args, proxy_url) -> dict:
     browser = None
     try:
         engine_cls = _get_engine(engine_name)
-        browser = launch(_ad_browser_cfg(proxy_url))
+        browser = launch(_ad_browser_cfg(proxy_url, engine_name))
         page = new_page(browser)
         eng = engine_cls(page)
-        results = eng.search(query, limit=args.limit or 10,
-                             country=args.country or "US",
-                             status="active")
+        results = _adapter_search(
+            eng,
+            engine_name,
+            query,
+            limit=args.limit or 10,
+            browser=browser,
+            country=args.country or "US",
+            status="active",
+        )
         return {"ok": True,
                 "results": [result_to_dict(r) for r in (results or [])],
                 "elapsed_s": round(_t.time() - started, 1)}
@@ -1190,12 +1329,15 @@ def _run_meta_advertiser(engine_name: str, page_id: str, args, proxy_url) -> dic
     browser = None
     try:
         engine_cls = _get_engine(engine_name)
-        browser = launch(_ad_browser_cfg(proxy_url))
+        browser = launch(_ad_browser_cfg(proxy_url, engine_name))
         page = new_page(browser)
         eng = engine_cls(page)
-        results = eng.search(
+        results = _adapter_search(
+            eng,
+            engine_name,
             f"page_id:{page_id}",
             limit=args.limit or 10,
+            browser=browser,
             mode="advertiser",
             country=args.country or "US",
             status="active",
@@ -1219,12 +1361,19 @@ def _run_tiktok_query(query: str, args, proxy_url) -> dict:
     browser = None
     try:
         engine_cls = _get_engine("tiktok_creative_center")
-        browser = launch(_ad_browser_cfg(proxy_url))
+        browser = launch(_ad_browser_cfg(proxy_url, "tiktok_creative_center"))
         page = new_page(browser)
         eng = engine_cls(page)
-        results = eng.search(query, limit=args.limit or 10,
-                             mode="top_ads", period=7,
-                             country_code=args.country or "US")
+        results = _adapter_search(
+            eng,
+            "tiktok_creative_center",
+            query,
+            limit=args.limit or 10,
+            browser=browser,
+            mode="top_ads",
+            period=7,
+            country_code=args.country or "US",
+        )
         return {"ok": True,
                 "results": [result_to_dict(r) for r in (results or [])],
                 "elapsed_s": round(_t.time() - started, 1)}
@@ -1242,18 +1391,24 @@ def _run_google_domain(domain: str, args, proxy_url) -> dict:
     workflows than search_advertisers — apps are tied to a website."""
     import time as _t
     started = _t.time()
+    browser = None
+    eng = None
+    eng2 = None
     try:
         from .engines.google_ad_transparency import GoogleAdTransparencyEngine
         if proxy_url:
             eng = GoogleAdTransparencyEngine.raw(proxy_url=proxy_url, timeout=20)
         else:
             from .core import launch, new_page
-            browser = launch(_ad_browser_cfg(None))
+            browser = launch(_ad_browser_cfg(None, "google_ad_transparency"))
             page = new_page(browser)
             eng = GoogleAdTransparencyEngine(page)
         # Step 1: domain → advertiser_id
-        domain_results = eng.search(
+        domain_results = _adapter_search(
+            eng,
+            "google_ad_transparency",
             domain, limit=1, mode="domain",
+            browser=browser if not proxy_url else None,
             region=args.country if args.country and args.country != "US" else "anywhere",
         )
         if not domain_results:
@@ -1267,8 +1422,11 @@ def _run_google_domain(domain: str, args, proxy_url) -> dict:
         # Step 2: advertiser_id → list of creatives
         eng2 = (GoogleAdTransparencyEngine.raw(proxy_url=proxy_url, timeout=20)
                 if proxy_url else eng)
-        creatives = eng2.search(
+        creatives = _adapter_search(
+            eng2,
+            "google_ad_transparency",
             adv_id, limit=args.limit or 10,
+            browser=browser if not proxy_url else None,
             mode="advertiser_ads",
             region=args.country if args.country and args.country != "US" else "anywhere",
         )
@@ -1278,6 +1436,19 @@ def _run_google_domain(domain: str, args, proxy_url) -> dict:
     except Exception as e:
         return {"ok": False, "error": f"{type(e).__name__}: {e}",
                 "results": [], "elapsed_s": round(_t.time() - started, 1)}
+    finally:
+        if browser is not None:
+            try:
+                browser.close()
+            except Exception:
+                pass
+        for adapter in (eng, eng2):
+            raw_session = getattr(adapter, "_raw_session", None)
+            if raw_session is not None:
+                try:
+                    raw_session.close()
+                except Exception:
+                    pass
 
 
 def cmd_ads(args):
@@ -1365,7 +1536,10 @@ def cmd_ads(args):
                         "results": [],
                     }
     elif args.workers > 1 and len(plans) > 1:
-        with ThreadPoolExecutor(max_workers=args.workers) as ex:
+        from .policies import browser_concurrency_limit
+
+        workers = min(args.workers, browser_concurrency_limit())
+        with ThreadPoolExecutor(max_workers=workers) as ex:
             future_to_label = {ex.submit(fn): lbl for lbl, fn in plans}
             for fut in as_completed(future_to_label):
                 lbl = future_to_label[fut]
@@ -1490,9 +1664,37 @@ def _expand_platforms(spec: str) -> list[str]:
     return out
 
 
-def _ad_browser_cfg(proxy_url):
+def _ad_browser_cfg(proxy_url, engine_name: str):
     from .core import BrowserConfig
-    return BrowserConfig(headless=True, humanize=False, proxy=proxy_url)
+    return BrowserConfig(
+        headless=True,
+        proxy=proxy_url,
+        engine_name=engine_name,
+    )
+
+
+def _adapter_search(
+    engine,
+    engine_name: str,
+    query: str,
+    *,
+    limit: int,
+    browser=None,
+    **options,
+):
+    """Apply central deadlines/metrics to specialized CLI adapter paths."""
+    from .runtime import execute_search
+
+    identity = getattr(browser, "_agentsearch_identity", None)
+    partition = identity.cache_partition if identity else "http-public"
+    return execute_search(
+        engine,
+        query,
+        limit=limit,
+        engine_name=engine_name,
+        options=options,
+        cache_partition=partition,
+    )
 
 
 def _run_meta_like(engine_name: str, args, proxy_url) -> dict:
@@ -1503,11 +1705,14 @@ def _run_meta_like(engine_name: str, args, proxy_url) -> dict:
     browser = None
     try:
         engine_cls = _get_engine(engine_name)
-        browser = launch(_ad_browser_cfg(proxy_url))
+        browser = launch(_ad_browser_cfg(proxy_url, engine_name))
         page = new_page(browser)
         eng = engine_cls(page)
-        results = eng.search(
+        results = _adapter_search(
+            eng,
+            engine_name,
             args.query, limit=args.limit or 10,
+            browser=browser,
             country=args.country or "US",
             status="active",
         )
@@ -1538,11 +1743,14 @@ def _run_tiktok(args, proxy_url) -> dict:
     browser = None
     try:
         engine_cls = _get_engine("tiktok_creative_center")
-        browser = launch(_ad_browser_cfg(proxy_url))
+        browser = launch(_ad_browser_cfg(proxy_url, "tiktok_creative_center"))
         page = new_page(browser)
         eng = engine_cls(page)
-        results = eng.search(
+        results = _adapter_search(
+            eng,
+            "tiktok_creative_center",
             args.query or "", limit=args.limit or 10,
+            browser=browser,
             mode="top_ads", period=7,
             country_code=args.country or "US",
         )
@@ -1575,6 +1783,7 @@ def _run_google(args, proxy_url) -> dict:
     from .core import launch, new_page
     started = _t.time()
     browser = None
+    eng = None
     try:
         from .engines.google_ad_transparency import GoogleAdTransparencyEngine
 
@@ -1582,17 +1791,23 @@ def _run_google(args, proxy_url) -> dict:
             eng = GoogleAdTransparencyEngine.raw(
                 proxy_url=proxy_url, timeout=20,
             )
-            results = eng.search(
+            results = _adapter_search(
+                eng,
+                "google_ad_transparency",
                 args.query, limit=args.limit or 10,
+                browser=None,
                 mode="search_advertisers",
                 region=args.country or "anywhere",
             )
         else:
-            browser = launch(_ad_browser_cfg(None))
+            browser = launch(_ad_browser_cfg(None, "google_ad_transparency"))
             page = new_page(browser)
             eng = GoogleAdTransparencyEngine(page)
-            results = eng.search(
+            results = _adapter_search(
+                eng,
+                "google_ad_transparency",
                 args.query, limit=args.limit or 10,
+                browser=browser,
                 mode="search_advertisers",
                 region=args.country or "anywhere",
             )
@@ -1612,6 +1827,12 @@ def _run_google(args, proxy_url) -> dict:
         if browser is not None:
             try: browser.close()
             except Exception: pass
+        raw_session = getattr(eng, "_raw_session", None)
+        if raw_session is not None:
+            try:
+                raw_session.close()
+            except Exception:
+                pass
 
 
 def _parse_ad_filters(specs: list[str]):
@@ -1790,23 +2011,44 @@ def _resolve_proxy_url(spec: Optional[str]) -> Optional[str]:
 def cmd_test(args):
     """Run anti-detection tests."""
     from .stealth.enhance import check_blocked
-    cfg = BrowserConfig(headless=not args.visible)
-    browser = launch(cfg)
-    page = new_page(browser)
+    from .policies import engine_uses_browser
+    from .runtime import execute_search
 
     sites = args.sites or ["google", "bing", "duckduckgo"]
     results = {}
 
     for name in sites:
+        browser = None
         try:
             engine_cls = _get_engine(name)
         except (ImportError, AttributeError, ValueError) as e:
             print(f"  ⏳ {name}: not available ({e})")
             continue
-
-        engine = engine_cls(page)
-        search_results = engine.search("test query", limit=3)
-        blocked = check_blocked(page)
+        try:
+            if engine_uses_browser(engine_cls):
+                browser = launch(BrowserConfig(
+                    headless=not args.visible,
+                    engine_name=getattr(engine_cls, "name", name),
+                ))
+                page = new_page(browser)
+                identity = getattr(browser, "_agentsearch_identity", None)
+                partition = identity.cache_partition if identity else "browser"
+            else:
+                page = None
+                partition = "http-public"
+            engine = engine_cls(page)
+            search_results = execute_search(
+                engine,
+                "test query",
+                limit=3,
+                engine_name=getattr(engine_cls, "name", name),
+                cache_partition=partition,
+                use_cache=False,
+            )
+            blocked = check_blocked(page) if page is not None else None
+        finally:
+            if browser is not None:
+                browser.close()
         results[name] = {
             "passed": len(search_results) > 0 and not blocked,
             "results_count": len(search_results),
@@ -1815,7 +2057,6 @@ def cmd_test(args):
         status = "✅" if results[name]["passed"] else "❌"
         print(f"  {status} {name}: {len(search_results)} results, blocked={blocked}")
 
-    browser.close()
     if results:
         print(f"\nPassed: {sum(1 for r in results.values() if r['passed'])}/{len(results)}")
     return 0
@@ -1942,36 +2183,46 @@ def cmd_bundle(args):
 
 def cmd_status(args):
     """Show per-engine health from the local sliding-window log."""
-    from .health import HealthLog, DEFAULT_HEALTH_PATH
+    from .health import HealthLog
 
     health = HealthLog()
     rows = health.all_stats()
 
     if args.json:
         print(json.dumps({
-            "path": str(DEFAULT_HEALTH_PATH),
+            "path": str(health.path),
             "engines": rows,
         }, ensure_ascii=False, indent=2))
         return 0
 
     if not rows:
         print(f"No health data yet. Run a few searches first.")
-        print(f"(Log path: {DEFAULT_HEALTH_PATH})")
+        print(f"(Log path: {health.path})")
         return 0
 
     # Sort by score descending so healthiest engines surface first.
     rows.sort(key=lambda s: health.score(s["engine"]), reverse=True)
 
-    print(f"Health log: {DEFAULT_HEALTH_PATH}")
+    print(f"Health log: {health.path}")
     print()
-    print(f"{'engine':<22} {'score':>6} {'attempts':>8} {'success':>8} {'avg_hits':>8} {'avg_ms':>7}  last")
-    print("-" * 80)
+    print(
+        f"{'engine':<20} {'score':>5} {'tries':>5} {'success':>8} "
+        f"{'p50':>6} {'p95':>6} {'nav':>6} {'cache':>7}  last"
+    )
+    print("-" * 92)
     for s in rows:
         score = health.score(s["engine"])
         sr = s["success_rate"]
         sr_str = f"{sr*100:>6.1f}%" if sr is not None else "    —  "
-        avg_hits = f"{s['avg_results']:>6.2f}" if s["avg_results"] is not None else "    —"
-        avg_ms = f"{s['avg_ms']:>5}" if s["avg_ms"] is not None else "    —"
+        p50 = f"{s['p50_ms']:>5}" if s["p50_ms"] is not None else "    —"
+        p95 = f"{s['p95_ms']:>5}" if s["p95_ms"] is not None else "    —"
+        nav = (
+            f"{s['avg_navigation_ms']:>5}"
+            if s["avg_navigation_ms"] is not None
+            else "    —"
+        )
+        cache_rate = s["cache_hit_rate"]
+        cache = f"{cache_rate * 100:>5.1f}%" if cache_rate is not None else "    —"
         last_ok = "✅" if s["last_ok"] else "❌"
         last_ago = ""
         if s["last_attempt"]:
@@ -1984,7 +2235,11 @@ def cmd_status(args):
                 last_ago = f"{ago // 3600}h ago"
             else:
                 last_ago = f"{ago // 86400}d ago"
-        print(f"{s['engine']:<22} {score:>6.2f} {s['attempts']:>8d} {sr_str:>8} {avg_hits:>8} {avg_ms:>7}ms  {last_ok} {last_ago}")
+        print(
+            f"{s['engine']:<20} {score:>5.2f} {s['attempts']:>5d} "
+            f"{sr_str:>8} {p50:>6} {p95:>6} {nav:>6} {cache:>7}  "
+            f"{last_ok} {last_ago}"
+        )
     return 0
 
 
@@ -2180,7 +2435,7 @@ def main():
         "--fallback-chain",
         default=None,
         help="Comma-separated override of the default fallback chain "
-             "(default: duckduckgo,google,bing,brave,startpage,qwant,ecosia)",
+             "(default: duckduckgo,brave,startpage,ecosia,google,bing)",
     )
     sp.add_argument(
         "--depth",
@@ -2487,6 +2742,11 @@ def main():
         "--url",
         default=None,
         help="Override the login URL (default: a known login URL for common sites)",
+    )
+    lgp.add_argument(
+        "--proxy",
+        default=None,
+        help="Bind this login profile to the same proxy spec used for searches.",
     )
 
     # canary — runs locally on the user's residential IP. See docs/CANARY.md.

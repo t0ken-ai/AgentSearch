@@ -28,10 +28,9 @@ from __future__ import annotations
 
 import logging
 import random
-import time
 import urllib.parse
 
-from ..core import safe_goto, human_delay
+from ..core import safe_goto, wait_for_any
 from .base import BaseEngine, SearchResult
 
 log = logging.getLogger(__name__)
@@ -86,14 +85,13 @@ class BraveEngine(BaseEngine):
         if not safe_goto(self.page, url):
             return []
 
-        human_delay(1.0, 2.2)
-
         # Wait for results container, but don't fail hard if the selector never
         # appears — we still try to extract from whatever rendered.
-        try:
-            self.page.wait_for_selector("#results", timeout=8000)
-        except Exception as e:
-            log.info("[brave] #results wait timed out: %s", e)
+        wait_for_any(
+            self.page,
+            ["#results", "main .snippet", "#challenge-running"],
+            timeout=8000,
+        )
 
         self._human_hints()
 
@@ -173,7 +171,6 @@ class BraveEngine(BaseEngine):
             )
         except Exception:
             pass
-        time.sleep(random.uniform(0.3, 0.7))
 
     # ---------------------------------------------------------------- extraction
 

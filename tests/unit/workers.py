@@ -7,6 +7,7 @@ closures, matching the constraint production engine runners must satisfy.
 
 from __future__ import annotations
 
+import os
 import time
 from typing import Any
 
@@ -35,4 +36,21 @@ def fake_engine_runner(
             "snippet": f"limit={limit}; headless={headless}",
         }],
         "elapsed_s": round(time.monotonic() - started, 3),
+    }
+
+
+def environment_runner(
+    engine_name: str,
+    _query: str,
+    _limit: int,
+    _headless: bool,
+) -> dict[str, Any]:
+    """Expose inherited worker settings without touching the filesystem."""
+    return {
+        "engine": engine_name,
+        "ok": True,
+        "count": 0,
+        "results": [],
+        "elapsed_s": 0.0,
+        "health_path": os.environ.get("AGENTSEARCH_HEALTH_PATH"),
     }

@@ -45,10 +45,9 @@ A single search call gives us everything the spec asks for — name, version,
 description, license, weekly/monthly downloads, links, publisher, keywords,
 and dependents — so we don't need any secondary requests.
 
-The endpoint returns ``application/json`` with permissive CORS, and there's
-no anti-bot challenge, so we use the same trick as ``archive_org`` /
-``wikivoyage`` / ``devto``: navigate the page to the API URL and read
-``document.body.innerText`` (Chromium renders the JSON as plain text).
+The endpoint returns ``application/json`` and has no anti-bot challenge, so
+the adapter uses direct HTTP. This avoids consuming a licensed Chromium
+session and lets API engines run alongside a browser search.
 
 Each :class:`SearchResult` carries the structured fields (``version``,
 ``description``, ``license``, ``downloads_weekly``, ``downloads_monthly``,
@@ -58,17 +57,16 @@ callers that want them don't have to reparse the snippet.
 
 from __future__ import annotations
 
-import json
 import logging
 from typing import Any
 from urllib.parse import quote_plus
 
-from .base import BaseEngine, SearchResult
+from .base import HttpEngine, SearchResult
 
 log = logging.getLogger(__name__)
 
 
-class NpmSearchEngine(BaseEngine):
+class NpmSearchEngine(HttpEngine):
     """Search the npm registry via its public ``-/v1/search`` JSON endpoint."""
 
     name = "npm"
@@ -125,24 +123,15 @@ class NpmSearchEngine(BaseEngine):
         return str(n)
 
     def _fetch_json(self, url: str) -> Any:
-        """``page.goto`` the URL and parse ``document.body.innerText`` as JSON."""
+        """Fetch the registry's documented JSON endpoint directly."""
         log.debug("[npm] GET %s", url)
         try:
-            self.page.goto(url, wait_until="domcontentloaded", timeout=30000)
+            return self.http_get(
+                url,
+                headers={"Accept": "application/json", "User-Agent": "AgentSearch"},
+            ).json()
         except Exception as e:
-            log.warning("[npm] goto failed for %s: %s", url, e)
-            return None
-
-        body = self.page.evaluate("() => document.body.innerText")
-        if not body:
-            return None
-        try:
-            return json.loads(body)
-        except json.JSONDecodeError as e:
-            log.warning(
-                "[npm] non-JSON response from %s: %s; body[:200]=%r",
-                url, e, body[:200],
-            )
+            log.warning("[npm] request failed for %s: %s", url, e)
             return None
 
     # ---------------------------------------------------------------- mapping

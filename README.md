@@ -27,7 +27,8 @@
 ## ⚡ TL;DR
 
 ```bash
-pip install cloakbrowser && pip install -e .
+pip install "cloakbrowser[geoip]>=0.5.7" && pip install -e .
+cloakbrowser login && cloakbrowser update
 
 # Search any of 100+ sites
 agentsearch search "what's new in transformers" --engine google --json
@@ -197,7 +198,9 @@ Meta / Facebook · Stripe · OpenAI · Anthropic · AWS · Google Cloud · Azure
 ### 1. Install
 
 ```bash
-pip install cloakbrowser
+pip install "cloakbrowser[geoip]>=0.5.7"
+cloakbrowser login
+cloakbrowser update
 git clone https://github.com/t0ken-ai/AgentSearch.git
 cd AgentSearch
 pip install -e .
@@ -331,7 +334,12 @@ OpenClaw will auto-load the skill and the agent will reach for AgentSearch whene
 | ``find_competitor_ads`` / ``ads_batch`` | Collect cross-platform competitor ads | Creative and advertiser research |
 | ``download_files`` / ``download_images`` / ``download_ad_media`` | Materialize discovered assets | Reports, images, and ad-creative collections |
 
-The server keeps a single Chromium alive across calls and recycles it every 25 calls (configurable via ``AGENTSEARCH_RECYCLE_AFTER``), so each tool call after the first costs <100ms of overhead instead of the full ~1.5s startup.
+Browser launches take a host-wide licensed-session lease, so separate MCP
+processes and projects cannot exceed the same CloakBrowser allowance. Servers
+release their browser after each operation by default; a dedicated
+single-client deployment can set ``AGENTSEARCH_RETAIN_BROWSER=1`` to reuse a
+warm session (recycled every ``AGENTSEARCH_RECYCLE_AFTER`` calls). Hacker News,
+npm, PubMed, and arXiv use direct HTTP and consume no Chromium session.
 
 ---
 
@@ -365,7 +373,7 @@ curl -X POST -H 'Content-Type: application/json' \
      localhost:8088/search
 ```
 
-> **Why single-threaded?** CloakBrowser uses Playwright's *sync* API, which binds each browser to its launching thread. A multi-threaded server would cross-thread the Browser. The self-hosted single-user use case doesn't need concurrency anyway. Concurrent agents → run multiple instances on different ports.
+> **Why single-threaded?** CloakBrowser uses Playwright's *sync* API, which binds each browser to its launching thread. A multi-threaded server would cross-thread the Browser. The default latest-binary free license permits one browser session; paid installations can set `AGENTSEARCH_BROWSER_CONCURRENCY` to their licensed limit.
 >
 > **Network safety**: the server refuses to bind `0.0.0.0` without a bearer token to prevent accidental network exposure.
 
@@ -426,19 +434,64 @@ agentsearch login twitter
 agentsearch login linkedin
 agentsearch login glassdoor
 
-# Use the persisted profile in any follow-up call:
-agentsearch search "from:elonmusk AI" --engine twitter --profile twitter --limit 10
+# Known login-walled engines pick up their profile automatically:
+agentsearch search "from:elonmusk AI" --engine twitter --limit 10
 agentsearch extract "https://www.linkedin.com/in/<handle>/" --profile linkedin --json
+
+# A profile and its egress are one identity. Log in and search through
+# the same proxy spec; a different proxy/country gets a separate slot.
+agentsearch login twitter --proxy "$FIXED_PROXY_URL"
+agentsearch search "from:elonmusk AI" --engine twitter --proxy "$FIXED_PROXY_URL"
 
 # Custom site? Override the login URL:
 agentsearch login mysite --url https://mysite.com/auth/signin
 ```
 
 Profiles live in `~/.cache/agentsearch/profiles/<name>/` (override with
-`AGENTSEARCH_PROFILES_DIR`). `--profile <name>` defaults to the site's
-own name when you ran `login`. Profiles preserve cookies, localStorage,
-IndexedDB, and service workers — the same shape as a real Chrome
-profile.
+`AGENTSEARCH_PROFILES_DIR`). Known account-heavy engines select these profiles
+automatically; `--profile <name>` remains available for custom identities.
+Profiles preserve cookies, localStorage, IndexedDB, and service workers. A
+cross-process lease prevents two Chromium processes from opening the same
+directory, and proxy affinity rejects accidental country/egress changes.
+`login` therefore accepts only a fixed proxy URL, not a rotating pool spec.
+</details>
+
+<details>
+<summary><b>Browser identity, cache, and performance policy</b></summary>
+
+AgentSearch creates one private install key at
+`~/.config/agentsearch/identity.key`. It derives a deterministic fingerprint
+seed per site family and proxy from that key. Related adapters such as Google
+Search/Images/Maps share a returning identity, but different installations do
+not share a public fingerprint. Ordinary search engines keep only the seed;
+login-heavy sites use disk profiles. This follows CloakBrowser's
+[official fingerprint guidance](https://github.com/CloakHQ/CloakBrowser#fingerprint-management):
+fix the seed for a returning visitor and let the browser derive coherent GPU,
+screen, hardware, canvas, WebGL, audio, and font signals from it.
+
+Public API adapters (`hackernews`, `npm`, `pubmed`, `arxiv`) use direct HTTP.
+Other engines receive independent deadlines, attempt budgets, and navigation
+retry policies. Successful public searches are cached for 2-5 minutes, keyed
+by query, options, and identity. Health records include p50/p95 latency,
+navigation and intentional-wait time, cache hits, deadline rate, and block
+reasons.
+
+| Environment variable | Default | Purpose |
+|---|---:|---|
+| `AGENTSEARCH_AUTO_PROFILES` | `1` | Set `0` to disable automatic disk profiles |
+| `AGENTSEARCH_PROFILES_DIR` | `~/.cache/agentsearch/profiles` | Profile and lock root |
+| `AGENTSEARCH_IDENTITY_DIR` | `~/.config/agentsearch` | Private install identity root |
+| `AGENTSEARCH_CACHE` | `1` | Set `0` to disable query caching |
+| `AGENTSEARCH_CACHE_PATH` | `~/.cache/agentsearch/search-cache.sqlite3` | SQLite cache path |
+| `AGENTSEARCH_BROWSER_CONCURRENCY` | `1` | Licensed simultaneous Chromium sessions |
+| `AGENTSEARCH_BROWSER_SLOT_DIR` | `~/.cache/agentsearch/browser-slots` | Cross-process session-lock root |
+| `AGENTSEARCH_RETAIN_BROWSER` | `0` | Set `1` only for a dedicated client that may retain an idle session |
+| `AGENTSEARCH_MAX_PARALLEL` | `8` | Maximum total API/browser worker processes |
+| `AGENTSEARCH_DEFAULT_TIMEZONE` | system | Optional direct-connection timezone override |
+| `AGENTSEARCH_DEFAULT_LOCALE` | system | Optional direct-connection locale override |
+
+With a proxy, CloakBrowser GeoIP derives timezone/locale/WebRTC from egress;
+the static timezone/locale defaults are not forced.
 </details>
 
 <details>
@@ -529,7 +582,8 @@ agentsearch search "llama" --engine huggingface --json
 <summary><b>⚡ Multi-engine fan-out (parallel + URL-deduped)</b></summary>
 
 ```bash
-# Run 3-5 engines concurrently. Wall-clock ≈ slowest engine, not sum.
+# Direct HTTP engines run concurrently. Browser engines honor the licensed
+# AGENTSEARCH_BROWSER_CONCURRENCY session budget (default 1).
 # URLs surfaced by multiple engines float to the top of the merged feed.
 agentsearch search-many "open source MCP web search" \
     --engines duckduckgo,hackernews,github --limit 5 --merged --json
@@ -558,14 +612,14 @@ agentsearch search "Brave Search API forbids AI" \
 <summary><b>🚦 Health-aware fallback (--fallback)</b></summary>
 
 ```bash
-# Try the chosen engine; if it returns empty / errors, walk down a
-# chain ranked by recent success rate. Engine health is recorded in
-# ~/.cache/agentsearch/health.json across calls.
+# Start the chosen engine, then hedge a health-ranked fallback after a short
+# delay. The first useful result cancels remaining workers. Engine health is
+# recorded in ~/.cache/agentsearch/health.json across calls.
 agentsearch search "X" --engine google --fallback --json
 
 # Custom chain:
 agentsearch search "X" --engine google \
-    --fallback --fallback-chain duckduckgo,bing,startpage --json
+    --fallback --fallback-chain duckduckgo,brave,startpage --json
 
 # Inspect the local health table (sorted by composite score):
 agentsearch status

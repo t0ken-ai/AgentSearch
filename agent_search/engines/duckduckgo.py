@@ -1,7 +1,7 @@
 """DuckDuckGo Search adapter."""
 
 import urllib.parse
-from ..core import safe_goto, human_delay
+from ..core import safe_goto, wait_for_any
 from .base import BaseEngine, SearchResult
 
 
@@ -14,7 +14,11 @@ class DuckDuckGoEngine(BaseEngine):
         url = f"https://html.duckduckgo.com/html/?q={q}"
         if not safe_goto(self.page, url):
             return []
-        human_delay(1, 2)
+        wait_for_any(
+            self.page,
+            [".result", ".no-results", "form#challenge-form"],
+            timeout=5000,
+        )
 
         results = []
         items = self.page.query_selector_all(".result")

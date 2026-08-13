@@ -1052,10 +1052,9 @@ def deep_fetch_urls(
     """Fetch + readability-extract a list of URLs.
 
     Useful as a follow-up to ``search`` so the agent can read the top-K
-    results in one shot instead of N round-trips of ``extract``. Each URL
-    gets its own fresh ``page`` (cookies / JS state isolated) but the
-    same ``browser`` instance is reused, so the cost amortises nicely
-    over the batch.
+    results in one shot instead of N round-trips of ``extract``. An explicit
+    ``browser`` is reused for authenticated workflows; otherwise each URL is
+    launched under its destination site's stable identity.
 
     Args:
         urls: list of URLs to fetch (in order).
@@ -1073,49 +1072,52 @@ def deep_fetch_urls(
         has the same shape as :func:`extract_page`'s return value, plus
         an ``input_url`` key mirroring the request.
     """
-    own_browser = False
-    if browser is None:
-        from .core import BrowserConfig, launch  # local import; avoid hard dep at module load
-        browser = launch(BrowserConfig(headless=True, humanize=True))
-        own_browser = True
-
+    own_browser = browser is None
     out: list[dict[str, Any]] = []
-    try:
-        for url in urls:
-            page = None
-            try:
-                page = browser.new_page()
-                rec = extract_page(
-                    page,
-                    url=url,
-                    paginate=paginate,
-                    max_scrolls=max_scrolls,
-                    include_links=False,
-                    include_images=False,
-                    timeout_ms=timeout_ms,
-                )
-                rec["input_url"] = url
-                out.append(rec)
-            except Exception as e:
-                if on_error == "raise":
-                    raise
-                log.warning("[deep_fetch] %s failed: %s", url, e)
-                out.append({
-                    "input_url": url,
-                    "url": url,
-                    "status": "error",
-                    "error": f"{type(e).__name__}: {e}",
-                })
-            finally:
-                if page is not None:
-                    try:
-                        page.close()
-                    except Exception:
-                        pass
-    finally:
-        if own_browser:
-            try:
-                browser.close()
-            except Exception:
-                pass
+    for url in urls:
+        page = None
+        current_browser = browser
+        try:
+            if current_browser is None:
+                from .core import BrowserConfig, launch
+
+                # A batch may cross unrelated domains. Each destination gets
+                # its own stable identity instead of sharing one fingerprint.
+                current_browser = launch(BrowserConfig(
+                    headless=True,
+                    target_url=url,
+                ))
+            page = current_browser.new_page()
+            rec = extract_page(
+                page,
+                url=url,
+                paginate=paginate,
+                max_scrolls=max_scrolls,
+                include_links=False,
+                include_images=False,
+                timeout_ms=timeout_ms,
+            )
+            rec["input_url"] = url
+            out.append(rec)
+        except Exception as e:
+            if on_error == "raise":
+                raise
+            log.warning("[deep_fetch] %s failed: %s", url, e)
+            out.append({
+                "input_url": url,
+                "url": url,
+                "status": "error",
+                "error": f"{type(e).__name__}: {e}",
+            })
+        finally:
+            if page is not None:
+                try:
+                    page.close()
+                except Exception:
+                    pass
+            if own_browser and current_browser is not None:
+                try:
+                    current_browser.close()
+                except Exception:
+                    pass
     return out

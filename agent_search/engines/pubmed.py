@@ -1,9 +1,8 @@
 """PubMed search adapter using NCBI E-utilities.
 
 NCBI exposes a stable, public, programmatically-friendly API. There is no
-anti-bot challenge, but we still issue HTTP requests via the browser context
-(``page.evaluate(fetch ...)``) so the calls go through whatever TLS / proxy /
-CA setup the user's stealth browser is already configured with.
+anti-bot challenge, so requests go directly through a proxy-aware HTTP session
+without consuming Chromium.
 
 Two-call flow:
     1. ``esearch`` (``retmode=json``) — turn the user query into a list of PMIDs.
@@ -21,8 +20,8 @@ to ``SNIPPET_MAX`` characters.
 NCBI usage policy (https://www.ncbi.nlm.nih.gov/books/NBK25497/):
     - <= 3 requests per second when no api_key is provided.
     - Identify your tool with a meaningful User-Agent.
-The two requests we issue per ``search`` call (one esearch + one efetch)
-sit comfortably under that limit.
+The host-wide request gate spaces starts across concurrent CLI/MCP workers;
+one search still batches all PMIDs into one follow-up ``efetch`` request.
 """
 
 from __future__ import annotations
@@ -33,12 +32,13 @@ from urllib.parse import urlencode
 from xml.etree import ElementTree as ET
 
 from .. import __version__
-from .base import BaseEngine, SearchResult
+from ..rate_limit import wait_for_request_slot
+from .base import HttpEngine, SearchResult
 
 log = logging.getLogger(__name__)
 
 
-class PubMedEngine(BaseEngine):
+class PubMedEngine(HttpEngine):
     """Search PubMed via NCBI E-utilities."""
 
     name = "pubmed"
@@ -55,54 +55,16 @@ class PubMedEngine(BaseEngine):
     HTTP_TIMEOUT = 30
     SNIPPET_MAX = 400
 
-    # ------------------------------------------------------------------ HTTP
-    # We route the HTTP calls through the browser instead of urllib so that
-    # the user's TLS chain (corporate MITM CAs, custom proxies, ...) handles
-    # them — the same chain the rest of the suite already trusts. This also
-    # means we don't pull in `requests`/`httpx` as runtime deps.
-    _FETCH_JS = (
-        "async (url) => {"
-        "  const r = await fetch(url, {"
-        "    credentials: 'omit',"
-        "    headers: { 'Accept': '*/*' },"
-        "  });"
-        "  const text = await r.text();"
-        "  return { ok: r.ok, status: r.status, text };"
-        "}"
-    )
-
-    # NCBI is happy to serve fetch() requests from any origin; using the
-    # eutils host as the base origin keeps us same-origin and avoids any
-    # CORS preflight noise.
-    _FETCH_BASE = "https://eutils.ncbi.nlm.nih.gov/"
-
-    def _ensure_fetch_context(self) -> None:
-        """Make sure the page is on an origin from which fetch() will work."""
-        url = ""
-        try:
-            url = (self.page.url or "").lower()
-        except Exception:
-            url = ""
-        if url.startswith("https://eutils.ncbi.nlm.nih.gov"):
-            return
-        try:
-            self.page.goto(
-                self._FETCH_BASE,
-                wait_until="domcontentloaded",
-                timeout=self.HTTP_TIMEOUT * 1000,
-            )
-        except Exception as e:
-            log.warning("[pubmed] could not navigate to fetch base: %s", e)
-
     def _fetch(self, url: str) -> str:
-        """GET ``url`` through the browser context and return the body as text."""
-        self._ensure_fetch_context()
-        result = self.page.evaluate(self._FETCH_JS, url)
-        if not isinstance(result, dict):
-            raise RuntimeError(f"unexpected fetch result type: {type(result).__name__}")
-        if not result.get("ok"):
-            raise RuntimeError(f"HTTP {result.get('status')} for {url}")
-        return result.get("text") or ""
+        """GET one NCBI endpoint directly with the required tool identity."""
+        # NCBI allows three requests/second without an API key. Reserving
+        # starts across processes prevents parallel fan-out from exceeding it.
+        wait_for_request_slot("eutils.ncbi.nlm.nih.gov", 0.34)
+        return self.http_get(
+            url,
+            timeout=self.HTTP_TIMEOUT,
+            headers={"Accept": "*/*", "User-Agent": self.USER_AGENT},
+        ).text
 
     # --------------------------------------------------------------- esearch
     def _esearch(self, query: str, limit: int) -> list[str]:

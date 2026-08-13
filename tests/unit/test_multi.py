@@ -11,7 +11,7 @@ from agent_search.multi import (
     search_images_many,
     search_many,
 )
-from tests.unit.workers import fake_engine_runner
+from tests.unit.workers import environment_runner, fake_engine_runner
 
 
 class MergeResultsTests(unittest.TestCase):
@@ -106,6 +106,43 @@ class ProcessFanoutTests(unittest.TestCase):
         self.assertFalse(deadline_reached)
         self.assertFalse(per_engine["raise"]["ok"])
         self.assertIn("intentional worker failure", per_engine["raise"]["error"])
+
+    def test_custom_health_path_is_propagated_to_spawned_worker(self) -> None:
+        per_engine, deadline_reached = _run_process_fanout(
+            ["fast"],
+            "query",
+            1,
+            True,
+            10.0,
+            1,
+            runner=environment_runner,
+            health_path="/tmp/custom-agentsearch-health.json",
+        )
+
+        self.assertFalse(deadline_reached)
+        self.assertEqual(
+            per_engine["fast"]["health_path"],
+            "/tmp/custom-agentsearch-health.json",
+        )
+
+    def test_hedge_cancels_slow_worker_after_first_success(self) -> None:
+        started = time.monotonic()
+        per_engine, deadline_reached = _run_process_fanout(
+            ["sleep:5", "fast"],
+            "query",
+            1,
+            True,
+            10.0,
+            2,
+            runner=fake_engine_runner,
+            hedge_delay_s=0.1,
+            stop_on_first_success=True,
+        )
+
+        self.assertFalse(deadline_reached)
+        self.assertTrue(per_engine["fast"]["winner"])
+        self.assertTrue(per_engine["sleep:5"]["cancelled"])
+        self.assertLess(time.monotonic() - started, 4.0)
 
 
 class PublicFanoutShapeTests(unittest.TestCase):

@@ -28,10 +28,10 @@ import logging
 import os
 import threading
 import time
+from collections import Counter
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
-
-from .results import result_to_dict
 
 log = logging.getLogger(__name__)
 
@@ -43,31 +43,68 @@ WINDOW_SIZE = 50
 # pin a specific engine. Ordered by historical reliability + speed.
 DEFAULT_CHAIN: list[str] = [
     "duckduckgo",
-    "google",
-    "bing",
     "brave",
     "startpage",
-    "qwant",
     "ecosia",
+    "google",
+    "bing",
 ]
 
 # Where the health log lives. Override with AGENTSEARCH_HEALTH_PATH for
 # tests / read-only environments.
-DEFAULT_HEALTH_PATH = Path(
-    os.environ.get(
-        "AGENTSEARCH_HEALTH_PATH",
-        str(Path.home() / ".cache" / "agentsearch" / "health.json"),
+def default_health_path() -> Path:
+    """Resolve at call time so tests and long-running hosts can redirect it."""
+    return Path(
+        os.environ.get(
+            "AGENTSEARCH_HEALTH_PATH",
+            str(Path.home() / ".cache" / "agentsearch" / "health.json"),
+        )
     )
-)
+
+
+DEFAULT_HEALTH_PATH = default_health_path()
 
 _LOCK = threading.Lock()
+
+
+@contextmanager
+def _file_lock(path: Path):
+    """Serialize health read-modify-write across fan-out worker processes."""
+    lock_path = path.with_suffix(path.suffix + ".lock")
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    handle = open(lock_path, "a+b")
+    try:
+        if os.name == "posix":
+            import fcntl
+
+            fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+        else:
+            import msvcrt
+
+            if handle.tell() == 0:
+                handle.write(b"0")
+                handle.flush()
+            handle.seek(0)
+            msvcrt.locking(handle.fileno(), msvcrt.LK_LOCK, 1)
+        yield
+    finally:
+        if os.name == "posix":
+            import fcntl
+
+            fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+        else:
+            import msvcrt
+
+            handle.seek(0)
+            msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
+        handle.close()
 
 
 class HealthLog:
     """Tiny JSON-backed sliding window of per-engine search outcomes."""
 
     def __init__(self, path: Path | str | None = None) -> None:
-        self.path = Path(path) if path else DEFAULT_HEALTH_PATH
+        self.path = Path(path) if path else default_health_path()
         self._data: dict[str, dict[str, Any]] = self._load()
 
     # ------------------------------------------------------------------ I/O
@@ -95,9 +132,23 @@ class HealthLog:
         except Exception as e:
             log.warning("[health] save failed: %s", e)
 
+    def refresh(self) -> "HealthLog":
+        """Reload the atomically replaced file after other workers write it."""
+        with _LOCK:
+            self._data = self._load()
+        return self
+
     # ------------------------------------------------------------- recording
 
-    def record(self, engine: str, *, ok: bool, count: int = 0, ms: int = 0) -> None:
+    def record(
+        self,
+        engine: str,
+        *,
+        ok: bool,
+        count: int = 0,
+        ms: int = 0,
+        metrics: dict[str, Any] | None = None,
+    ) -> None:
         """Record a single attempt against an engine.
 
         ``ok`` True iff the engine returned at least one result without
@@ -105,12 +156,37 @@ class HealthLog:
         the wall-clock time spent on the attempt.
         """
         with _LOCK:
-            slot = self._data.setdefault(engine, {"window": []})
-            window: list[dict[str, Any]] = slot.setdefault("window", [])
-            window.append({"ts": int(time.time()), "ok": bool(ok), "count": int(count), "ms": int(ms)})
-            if len(window) > WINDOW_SIZE:
-                del window[: len(window) - WINDOW_SIZE]
-            self._save()
+            with _file_lock(self.path):
+                # Every process may have loaded an older snapshot before it
+                # waited for the lock, so reload inside the critical section.
+                self._data = self._load()
+                slot = self._data.setdefault(engine, {"window": []})
+                window: list[dict[str, Any]] = slot.setdefault("window", [])
+                row = {
+                    "ts": int(time.time()),
+                    "ok": bool(ok),
+                    "count": int(count),
+                    "ms": int(ms),
+                }
+                if metrics:
+                    # Keep the health schema flat and JSON-compatible. Unknown
+                    # future metrics are ignored so old logs remain readable.
+                    for key in (
+                        "transport",
+                        "navigation_count",
+                        "navigation_ms",
+                        "wait_ms",
+                        "condition_wait_ms",
+                        "blocked_reason",
+                        "cache_hit",
+                        "deadline_reached",
+                    ):
+                        if key in metrics:
+                            row[key] = metrics[key]
+                window.append(row)
+                if len(window) > WINDOW_SIZE:
+                    del window[: len(window) - WINDOW_SIZE]
+                self._save()
 
     # ----------------------------------------------------------------- stats
 
@@ -125,17 +201,58 @@ class HealthLog:
                 "success_rate": None,
                 "avg_results": None,
                 "avg_ms": None,
+                "p50_ms": None,
+                "p95_ms": None,
+                "avg_navigation_ms": None,
+                "avg_wait_ms": None,
+                "avg_condition_wait_ms": None,
+                "cache_hit_rate": None,
+                "deadline_rate": None,
+                "block_reasons": {},
                 "last_attempt": None,
                 "last_ok": None,
             }
         attempts = len(window)
         ok_count = sum(1 for w in window if w.get("ok"))
+        durations = sorted(int(w.get("ms", 0)) for w in window)
+
+        def percentile(ratio: float) -> int:
+            # Nearest-rank keeps the value observable in this small (<=50)
+            # window instead of interpolating a latency no call experienced.
+            rank = int(len(durations) * ratio + 0.999) - 1
+            return durations[max(0, min(len(durations) - 1, rank))]
+
+        block_reasons = Counter(
+            str(w.get("blocked_reason"))
+            for w in window
+            if w.get("blocked_reason")
+        )
         return {
             "engine": engine,
             "attempts": attempts,
             "success_rate": round(ok_count / attempts, 3),
             "avg_results": round(sum(w.get("count", 0) for w in window) / attempts, 2),
             "avg_ms": int(sum(w.get("ms", 0) for w in window) / attempts) if attempts else 0,
+            "p50_ms": percentile(0.50),
+            "p95_ms": percentile(0.95),
+            "avg_navigation_ms": int(
+                sum(int(w.get("navigation_ms", 0)) for w in window) / attempts
+            ),
+            "avg_wait_ms": int(
+                sum(int(w.get("wait_ms", 0)) for w in window) / attempts
+            ),
+            "avg_condition_wait_ms": int(
+                sum(int(w.get("condition_wait_ms", 0)) for w in window)
+                / attempts
+            ),
+            "cache_hit_rate": round(
+                sum(bool(w.get("cache_hit")) for w in window) / attempts, 3
+            ),
+            "deadline_rate": round(
+                sum(bool(w.get("deadline_reached")) for w in window) / attempts,
+                3,
+            ),
+            "block_reasons": dict(block_reasons.most_common(5)),
             "last_attempt": window[-1].get("ts"),
             "last_ok": bool(window[-1].get("ok")),
         }
@@ -168,40 +285,12 @@ class HealthLog:
 
 
 def _run_search_once(engine_name: str, query: str, limit: int, headless: bool):
-    """Internal: launch a fresh browser, run one engine, return results+meta."""
-    from .core import BrowserConfig, launch, new_page  # local import to keep startup cheap
-    from .cli import _get_engine
+    """Compatibility wrapper around the transport-aware worker runner."""
+    from .multi import _run_one_engine
 
-    started = time.time()
-    try:
-        engine_cls = _get_engine(engine_name)
-    except ValueError as e:
-        return {"ok": False, "results": [], "error": str(e), "ms": 0}
-
-    browser = None
-    try:
-        browser = launch(BrowserConfig(headless=headless, humanize=True))
-        page = new_page(browser)
-        instance = engine_cls(page)
-        raw = instance.search(query, limit=limit) or []
-        return {
-            "ok": bool(raw),
-            "results": raw,
-            "ms": int((time.time() - started) * 1000),
-        }
-    except Exception as e:
-        return {
-            "ok": False,
-            "results": [],
-            "error": f"{type(e).__name__}: {e}",
-            "ms": int((time.time() - started) * 1000),
-        }
-    finally:
-        if browser is not None:
-            try:
-                browser.close()
-            except Exception:
-                pass
+    payload = _run_one_engine(engine_name, query, limit, headless)
+    payload["ms"] = int(float(payload.get("elapsed_s", 0)) * 1000)
+    return payload
 
 
 def search_with_fallback(
@@ -212,8 +301,10 @@ def search_with_fallback(
     chain: list[str] | None = None,
     headless: bool = True,
     health: HealthLog | None = None,
+    timeout_s: float = 45.0,
+    hedge_delay_s: float = 1.25,
 ) -> dict[str, Any]:
-    """Try ``primary`` first; on empty/error, walk down the fallback chain.
+    """Hedge a healthy fallback after a delay and return the first useful hit.
 
     The ``chain`` is reordered by health score on every call so a
     consistently-flaky engine bubbles down. The user's chosen ``primary``
@@ -228,6 +319,7 @@ def search_with_fallback(
       * ``fallback``: True iff primary failed and a backup served the answer
     """
     health = health or HealthLog()
+    health.refresh()
     chain = chain or list(DEFAULT_CHAIN)
 
     # Build the ordered try-list:
@@ -241,37 +333,46 @@ def search_with_fallback(
     rest = sorted((e for e in chain if e not in seen), key=health.score, reverse=True)
     try_list.extend(rest)
 
+    from .multi import race_search
+
+    race = race_search(
+        query,
+        try_list,
+        limit=limit,
+        headless=headless,
+        timeout_s=timeout_s,
+        hedge_delay_s=hedge_delay_s,
+        health_path=str(health.path),
+    )
+    health.refresh()
     attempts: list[dict[str, Any]] = []
-    for engine_name in try_list:
-        out = _run_search_once(engine_name, query, limit, headless)
+    for engine_name, out in race["per_engine"].items():
         attempts.append(
             {
                 "engine": engine_name,
-                "ok": out["ok"],
+                "ok": bool(out.get("ok")),
                 "count": len(out.get("results", [])),
-                "ms": out["ms"],
+                "ms": int(float(out.get("elapsed_s", 0)) * 1000),
                 "error": out.get("error"),
+                **({"cancelled": True} if out.get("cancelled") else {}),
             }
         )
-        health.record(
-            engine_name,
-            ok=out["ok"],
-            count=len(out.get("results", [])),
-            ms=out["ms"],
-        )
-        if out["ok"]:
-            return {
-                "query": query,
-                "engine": engine_name,
-                "results": [result_to_dict(r) for r in out["results"]],
-                "attempts": attempts,
-                "fallback": engine_name != primary if primary else False,
-            }
-
+    winner = race.get("engine")
+    if winner:
+        return {
+            "query": query,
+            "engine": winner,
+            "results": race["results"],
+            "attempts": attempts,
+            "fallback": winner != primary if primary else False,
+            "elapsed_s": race["elapsed_s"],
+        }
     return {
         "query": query,
         "engine": None,
         "results": [],
         "attempts": attempts,
         "fallback": bool(primary),
+        "elapsed_s": race["elapsed_s"],
+        "deadline_reached": race["deadline_reached"],
     }

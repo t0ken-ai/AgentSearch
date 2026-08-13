@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import os
+import tempfile
 import unittest
 from unittest.mock import patch
 
@@ -30,24 +32,30 @@ class BrowserPoolTests(unittest.TestCase):
             return browser
 
         pool = BrowserPool()
-        with patch("agent_search.serve.launch", side_effect=fake_launch):
+        with tempfile.TemporaryDirectory() as tmp, patch.dict(
+            os.environ,
+            {
+                "AGENTSEARCH_IDENTITY_DIR": f"{tmp}/identity",
+                "AGENTSEARCH_PROFILES_DIR": f"{tmp}/profiles",
+            },
+        ), patch("agent_search.serve.launch", side_effect=fake_launch):
             with pool.session() as anonymous_first:
                 pass
-            with pool.session("/profiles/alice") as profile_browser:
+            with pool.session(f"{tmp}/profiles/alice") as profile_browser:
                 self.assertIsNot(profile_browser, anonymous_first)
                 self.assertEqual(profile_browser.close_calls, 0)
+                self.assertEqual(anonymous_first.close_calls, 1)
 
             self.assertEqual(profile_browser.close_calls, 1)
-            self.assertEqual(anonymous_first.close_calls, 0)
 
             with pool.session() as anonymous_second:
-                self.assertIs(anonymous_second, anonymous_first)
+                self.assertIsNot(anonymous_second, anonymous_first)
 
             pool.shutdown()
 
-        self.assertEqual(len(launched), 2)
+        self.assertEqual(len(launched), 3)
         self.assertIsNone(configs[0].user_data_dir)
-        self.assertEqual(configs[1].user_data_dir, "/profiles/alice")
+        self.assertTrue(configs[1].user_data_dir.endswith("/profiles/alice"))
         self.assertEqual(anonymous_first.close_calls, 1)
 
     def test_shared_browser_recycles_at_configured_boundary(self) -> None:
@@ -59,9 +67,16 @@ class BrowserPoolTests(unittest.TestCase):
             return browser
 
         pool = BrowserPool()
-        with (
-            patch("agent_search.serve.launch", side_effect=fake_launch),
-            patch("agent_search.serve.RECYCLE_AFTER", 1),
+        with tempfile.TemporaryDirectory() as tmp, patch.dict(
+            os.environ,
+            {
+                "AGENTSEARCH_IDENTITY_DIR": f"{tmp}/identity",
+                "AGENTSEARCH_PROFILES_DIR": f"{tmp}/profiles",
+            },
+        ), patch(
+            "agent_search.serve.launch", side_effect=fake_launch
+        ), patch("agent_search.serve.RECYCLE_AFTER", 1), patch(
+            "agent_search.serve.RETAIN_BROWSER", True
         ):
             with pool.session() as first:
                 pass

@@ -36,10 +36,9 @@ from __future__ import annotations
 
 import logging
 import random
-import time
 import urllib.parse
 
-from ..core import safe_goto, human_delay
+from ..core import safe_goto, wait_for_any
 from .base import BaseEngine, SearchResult
 
 log = logging.getLogger(__name__)
@@ -162,23 +161,24 @@ class QwantEngine(BaseEngine):
         url = f"{QWANT_BASE}/?q={q}&t=web"
         log.info("[qwant] navigating to %s", url)
 
-        if not safe_goto(self.page, url):
+        if not safe_goto(self.page, url, timeout=8000, retries=0):
+            # Continuing to inspect a still-navigating React page can block
+            # each Playwright query for its 30s default timeout. Let fallback
+            # act instead of turning one failed navigation into a long tail.
             return []
 
-        human_delay(1.5, 3.0)
         self._dismiss_consent()
 
-        for sel in (
-            '[data-testid="webResult"]',
-            'article[data-testid*="webResult"]',
-            "article.result",
-            "main article",
-        ):
-            try:
-                self.page.wait_for_selector(sel, timeout=5000)
-                break
-            except Exception:
-                continue
+        wait_for_any(
+            self.page,
+            (
+                '[data-testid="webResult"]',
+                'article[data-testid*="webResult"]',
+                "article.result",
+                "main article",
+            ),
+            timeout=1500,
+        )
 
         self._human_hints()
 
@@ -214,7 +214,6 @@ class QwantEngine(BaseEngine):
                 if btn:
                     btn.click(timeout=2000)
                     log.info("[qwant] dismissed consent (%s)", sel)
-                    human_delay(0.4, 0.9)
                     return
             except Exception:
                 continue
@@ -270,7 +269,6 @@ class QwantEngine(BaseEngine):
             )
         except Exception:
             pass
-        time.sleep(random.uniform(0.3, 0.7))
 
     # ---------------------------------------------------------------- extraction
 

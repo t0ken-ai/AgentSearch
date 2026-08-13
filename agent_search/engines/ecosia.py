@@ -40,10 +40,9 @@ from __future__ import annotations
 
 import logging
 import random
-import time
 import urllib.parse
 
-from ..core import safe_goto, human_delay
+from ..core import safe_goto, wait_for_any
 from .base import BaseEngine, SearchResult
 
 log = logging.getLogger(__name__)
@@ -171,20 +170,18 @@ class EcosiaEngine(BaseEngine):
         if not safe_goto(self.page, url):
             return []
 
-        human_delay(1.0, 2.2)
         self._dismiss_consent()
 
-        for sel in (
-            '[data-test-id="organic-result"]',
-            "article.result",
-            ".mainline__result",
-            "main article",
-        ):
-            try:
-                self.page.wait_for_selector(sel, timeout=4000)
-                break
-            except Exception:
-                continue
+        wait_for_any(
+            self.page,
+            (
+                '[data-test-id="organic-result"]',
+                "article.result",
+                ".mainline__result",
+                "main article",
+            ),
+            timeout=5000,
+        )
 
         self._human_hints()
 
@@ -220,7 +217,6 @@ class EcosiaEngine(BaseEngine):
                 if btn:
                     btn.click(timeout=2000)
                     log.info("[ecosia] dismissed consent (%s)", sel)
-                    human_delay(0.4, 0.9)
                     return
             except Exception:
                 continue
@@ -276,7 +272,6 @@ class EcosiaEngine(BaseEngine):
             )
         except Exception:
             pass
-        time.sleep(random.uniform(0.3, 0.7))
 
     # ---------------------------------------------------------------- extraction
 

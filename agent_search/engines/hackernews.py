@@ -10,10 +10,8 @@ mirroring the ``stackoverflow.py`` strategy:
    (also supports ``search_by_date`` for chronological sort). Returns
    JSON with ``hits[]`` containing ``title``, ``url``, ``points``,
    ``num_comments``, ``author``, ``objectID``, ``created_at``. No
-   auth, no rate limit visible in headers (Algolia front-end uses
-   ~10k req/s caps); this is the cleanest, most stable path. We
-   navigate the cloak browser to the API URL and parse the JSON body
-   exactly the way ``stackoverflow.py`` parses the Stack Exchange API.
+   auth; this is the cleanest, most stable path. AgentSearch calls it
+   directly over HTTP, so normal searches do not launch Chromium.
 
 2. **hn_algolia_html** — Navigate to ``https://hn.algolia.com/?q=<q>``
    (the user-facing HN Search SPA). After JS executes, results render
@@ -71,7 +69,7 @@ import time
 import urllib.parse
 
 from ..core import safe_goto, human_delay
-from .base import BaseEngine, SearchResult
+from .base import HttpEngine, SearchResult
 
 log = logging.getLogger(__name__)
 
@@ -249,7 +247,7 @@ def _attach_extras(
 # ----------------------------------------------------------------------------
 
 
-class HackerNewsEngine(BaseEngine):
+class HackerNewsEngine(HttpEngine):
     name = "hackernews"
     max_retries = 3
 
@@ -276,6 +274,12 @@ class HackerNewsEngine(BaseEngine):
         if results:
             self._last_mode = "hn_algolia_api"
             return results
+
+        # Public entry points instantiate this HTTP adapter without a page.
+        # The old DOM fallbacks remain available only to direct legacy callers
+        # that intentionally supply a browser page.
+        if self.page is None:
+            return []
 
         # 2) hn.algolia.com SPA — same data, scraped from DOM.
         try:
@@ -304,7 +308,7 @@ class HackerNewsEngine(BaseEngine):
     def _try_algolia_api(self, query: str, limit: int) -> list[SearchResult]:
         """Fetch from Algolia HN ``/search`` (or ``/search_by_date``).
 
-        We navigate the browser to the API URL and parse the JSON body.
+        We call the public API directly and parse its JSON response.
         Pagination is handled via ``&page=N`` until ``page+1 >= nbPages``
         or ``limit`` is satisfied.
         """
@@ -331,18 +335,24 @@ class HackerNewsEngine(BaseEngine):
                 + urllib.parse.urlencode(params)
             )
             log.info("[hn] api page %d: %s", api_page, url)
-            if not safe_goto(self.page, url, timeout=25000, retries=1):
+            try:
+                response = self.http_get(
+                    url,
+                    headers={
+                        "Accept": "application/json",
+                        "User-Agent": "AgentSearch HackerNews adapter",
+                    },
+                )
+                payload = response.json()
+            except Exception as exc:
                 self.last_status = {
                     "mode": "hn_algolia_api",
-                    "error": "goto_failed",
+                    "error": f"{type(exc).__name__}: {exc}",
                 }
                 return results
 
             self._pages_fetched = api_page + 1
-            human_delay(0.3, 0.8)
-
-            payload = self._read_json_body()
-            if not payload:
+            if not isinstance(payload, dict):
                 # Empty / non-JSON response (Cloudflare gate, captive
                 # portal, …). Bail to next mode.
                 self.last_status = {
@@ -358,7 +368,7 @@ class HackerNewsEngine(BaseEngine):
                 "selector": "json",
                 "api_nb_hits": payload.get("nbHits"),
                 "api_pages": payload.get("nbPages"),
-                "body_len": payload.get("_body_len", 0),
+                "body_len": len(response.content),
             }
             if "message" in payload and not payload.get("hits"):
                 # Algolia returns ``{"message": "...", "status": 4xx}``

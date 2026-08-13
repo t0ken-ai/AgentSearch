@@ -12,17 +12,15 @@ Features:
    "no results" / "we couldn't find" / "verify you are human").
 5. Bing /ck/a redirect cleaning: extracts the real `u=` parameter and
    base64-decodes when needed.
-6. Light human hints (mouse move + small scroll) and `human_delay` jitter
-   between navigations.
+6. Light mouse/scroll hints without fixed sleeps between navigations.
 """
 
 import base64
 import logging
 import random
-import time
 import urllib.parse
 
-from ..core import safe_goto, human_delay
+from ..core import safe_goto, wait_for_any
 from .base import BaseEngine, SearchResult
 
 log = logging.getLogger(__name__)
@@ -121,8 +119,12 @@ class BingEngine(BaseEngine):
     def _do_search(self, query: str, limit: int) -> list[SearchResult]:
         # Warm-up: hit the homepage first so cookies and consent settle, then
         # accept consent before submitting the search query.
-        if safe_goto(self.page, BING_HOME + "/", timeout=20000, retries=1):
-            human_delay(1.2, 2.5)
+        if safe_goto(self.page, BING_HOME + "/", timeout=6000, retries=0):
+            wait_for_any(
+                self.page,
+                [*CONSENT_BUTTON_SELECTORS, "input[name='q']"],
+                timeout=2500,
+            )
             self._handle_consent()
             self._human_hints()
 
@@ -132,8 +134,12 @@ class BingEngine(BaseEngine):
         if not safe_goto(self.page, url):
             return []
 
-        human_delay(1.5, 3.0)
         self._handle_consent()
+        wait_for_any(
+            self.page,
+            [*RESULT_SELECTORS, "#b_results h2", "#b_captcha"],
+            timeout=6000,
+        )
         self._human_hints()
 
         if self._is_blocked():
@@ -169,7 +175,6 @@ class BingEngine(BaseEngine):
                 if btn:
                     btn.click(timeout=3000)
                     log.info("[bing] clicked consent (%s)", sel)
-                    human_delay(0.8, 1.6)
                     return
             except Exception:
                 continue
@@ -190,7 +195,6 @@ class BingEngine(BaseEngine):
                                 "[bing] clicked consent inside frame %s (%s)",
                                 furl, sel,
                             )
-                            human_delay(0.8, 1.6)
                             return
                     except Exception:
                         continue
@@ -253,7 +257,6 @@ class BingEngine(BaseEngine):
             )
         except Exception:
             pass
-        time.sleep(random.uniform(0.3, 0.8))
 
     # ---------------------------------------------------------------- extraction
 

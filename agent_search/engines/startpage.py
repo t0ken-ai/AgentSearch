@@ -47,10 +47,9 @@ from __future__ import annotations
 
 import logging
 import random
-import time
 import urllib.parse
 
-from ..core import safe_goto, human_delay
+from ..core import safe_goto, wait_for_any
 from .base import BaseEngine, SearchResult
 
 log = logging.getLogger(__name__)
@@ -175,18 +174,15 @@ class StartpageEngine(BaseEngine):
         if not safe_goto(self.page, url):
             return []
 
-        human_delay(1.2, 2.5)
-
         # Wait for the results section, but don't fail hard if the
         # selector never appears — Startpage occasionally renders
         # results without the section wrapper, and we still try to
         # extract from whatever is present.
-        for sel in ("section.w-gl", "div.w-gl__result", '[data-testid="results"]'):
-            try:
-                self.page.wait_for_selector(sel, timeout=4000)
-                break
-            except Exception:
-                continue
+        wait_for_any(
+            self.page,
+            ("section.w-gl", "div.w-gl__result", '[data-testid="results"]'),
+            timeout=5000,
+        )
 
         self._human_hints()
 
@@ -274,7 +270,6 @@ class StartpageEngine(BaseEngine):
             )
         except Exception:
             pass
-        time.sleep(random.uniform(0.3, 0.7))
 
     # ---------------------------------------------------------------- extraction
 

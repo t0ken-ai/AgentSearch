@@ -35,11 +35,11 @@ Cline, Continue, Kiro, Roo Code, Zed, ...):
   * ``image_search_many``       — hard-deadline image fan-out + merge
   * ``download_images``         — materialize image results to disk
 
-The server keeps a single CloakBrowser instance alive for the lifetime
-of the process so each tool call doesn't pay the ~0.5-2s Chromium
-startup cost. The browser is recycled lazily after a configurable
-number of calls (the page state otherwise drifts — cookies pile up,
-JS world gets polluted, etc.).
+By default the server releases CloakBrowser after each tool operation so
+separate MCP processes can share a one-session license. Dedicated
+single-client deployments can set ``AGENTSEARCH_RETAIN_BROWSER=1`` to keep a
+warm browser, which is still recycled lazily after a configurable number of
+calls (the page state otherwise drifts as cookies and JS state accumulate).
 
 Run with::
 
@@ -67,6 +67,7 @@ import os
 import threading
 from functools import partial
 from typing import Any
+from weakref import WeakKeyDictionary
 
 from mcp.server.fastmcp import FastMCP
 
@@ -74,15 +75,16 @@ from . import __version__
 from .core import BrowserConfig, launch, new_page
 from .cli import _engine_registry, _get_engine
 from .extract import extract_page
+from .policies import engine_uses_browser, retain_browser_sessions
 from .results import result_to_dict
+from .runtime import execute_search, get_cached_search
 
 log = logging.getLogger(__name__)
 
-# How many tool calls to serve from the same Chromium before we recycle.
-# Keeping a single instance forever causes cookie/JS-world drift on some
-# sites; recycling every N calls keeps things fresh without paying the
-# startup cost for every request.
+# When warm-session retention is explicitly enabled, recycle after this many
+# calls so cookie and JS-world drift cannot accumulate forever.
 RECYCLE_AFTER = int(os.environ.get("AGENTSEARCH_RECYCLE_AFTER", "25"))
+RETAIN_BROWSER = retain_browser_sessions()
 
 # Default headless mode. Override with AGENTSEARCH_HEADLESS=0 for debugging.
 HEADLESS = os.environ.get("AGENTSEARCH_HEADLESS", "1") != "0"
@@ -116,6 +118,32 @@ _BROWSER_EXECUTOR = concurrent.futures.ThreadPoolExecutor(
     max_workers=1,
     thread_name_prefix="agent-search-browser",
 )
+_BROWSER_OPERATION_LOCKS = WeakKeyDictionary()
+_BROWSER_OPERATION_LOCKS_GUARD = threading.Lock()
+
+
+def _browser_operation_lock() -> asyncio.Lock:
+    """Return one browser-work lock per MCP event loop.
+
+    The dedicated executor protects Playwright's thread affinity. This second
+    lock protects CloakBrowser's licensed session budget while a subprocess
+    fan-out temporarily owns the browser slot.
+    """
+    loop = asyncio.get_running_loop()
+    with _BROWSER_OPERATION_LOCKS_GUARD:
+        lock = _BROWSER_OPERATION_LOCKS.get(loop)
+        if lock is None:
+            lock = asyncio.Lock()
+            _BROWSER_OPERATION_LOCKS[loop] = lock
+        return lock
+
+
+async def _run_on_browser_thread(fn, *args, **kwargs):
+    """Submit browser work after the caller has acquired the operation lock."""
+    loop = asyncio.get_running_loop()
+    if args or kwargs:
+        fn = partial(fn, *args, **kwargs)
+    return await loop.run_in_executor(_BROWSER_EXECUTOR, fn)
 
 
 async def _to_browser_thread(fn, *args, **kwargs):
@@ -130,10 +158,15 @@ async def _to_browser_thread(fn, *args, **kwargs):
     See module-level comment on ``_BROWSER_EXECUTOR`` for the full
     reasoning.
     """
-    loop = asyncio.get_running_loop()
-    if args or kwargs:
-        fn = partial(fn, *args, **kwargs)
-    return await loop.run_in_executor(_BROWSER_EXECUTOR, fn)
+    async with _browser_operation_lock():
+        try:
+            return await _run_on_browser_thread(fn, *args, **kwargs)
+        finally:
+            if not RETAIN_BROWSER:
+                # Core holds the cross-process session lease for the browser
+                # lifetime. Closing here hands that slot to another Codex
+                # task instead of letting an idle MCP process monopolize it.
+                await _run_on_browser_thread(_pool.shutdown)
 
 
 def _resolve_default_proxy() -> str | None:
@@ -148,11 +181,9 @@ def _resolve_default_proxy() -> str | None:
     it up automatically rather than forcing every deployment to also
     edit the unit / compose file.
     """
-    for var in ("AGENTSEARCH_PROXY", "FLUXISP_PROXY", "HTTPS_PROXY", "HTTP_PROXY"):
-        v = os.environ.get(var)
-        if v:
-            return v
-    return None
+    from .core import environment_proxy_url
+
+    return environment_proxy_url()
 
 
 class BrowserPool:
@@ -171,28 +202,52 @@ class BrowserPool:
         # Thread id of whichever worker first launched the browser.
         # Set in _start(); checked in page().
         self._browser_thread_id: int | None = None
+        self._launch_key: str | None = None
 
-    def _start(self) -> None:
-        log.info("[mcp] launching browser (headless=%s)", HEADLESS)
+    def _start(
+        self,
+        *,
+        engine_name: str | None = None,
+        target_url: str | None = None,
+    ) -> None:
+        log.info(
+            "[mcp] launching browser (headless=%s engine=%s target=%s)",
+            HEADLESS,
+            engine_name,
+            target_url,
+        )
         self._browser = launch(BrowserConfig(
             headless=HEADLESS,
-            humanize=True,
             proxy=_resolve_default_proxy(),
+            engine_name=engine_name,
+            target_url=target_url,
         ))
         self._calls = 0
         self._browser_thread_id = threading.get_ident()
+        identity = getattr(self._browser, "_agentsearch_identity", None)
+        self._launch_key = identity.launch_key if identity else None
 
-    def _maybe_recycle(self) -> None:
-        if self._calls >= RECYCLE_AFTER and self._browser is not None:
-            log.info("[mcp] recycling browser after %d calls", self._calls)
+    def _close_current(self) -> None:
+        if self._browser is not None:
             try:
                 self._browser.close()
             except Exception:
                 pass
-            self._browser = None
-            self._browser_thread_id = None
+        self._browser = None
+        self._browser_thread_id = None
+        self._launch_key = None
 
-    def page(self):
+    def _maybe_recycle(self) -> None:
+        if self._calls >= RECYCLE_AFTER and self._browser is not None:
+            log.info("[mcp] recycling browser after %d calls", self._calls)
+            self._close_current()
+
+    def page(
+        self,
+        *,
+        engine_name: str | None = None,
+        target_url: str | None = None,
+    ):
         """Return a fresh page bound to the live browser.
 
         Must be called from the dedicated browser worker thread (i.e.
@@ -202,38 +257,67 @@ class BrowserPool:
         ``RuntimeError`` rather than an opaque greenlet stack trace.
         """
         with self._lock:
+            cur = threading.get_ident()
+            if (
+                self._browser is not None
+                and self._browser_thread_id is not None
+                and cur != self._browser_thread_id
+            ):
+                raise RuntimeError(
+                    f"BrowserPool.page() called from thread {cur} but "
+                    f"the browser was created on thread "
+                    f"{self._browser_thread_id}. Playwright's sync API "
+                    f"is greenlet-bound to its creation thread; route "
+                    f"this call through _to_browser_thread() instead "
+                    f"of asyncio.to_thread()."
+                )
             self._maybe_recycle()
+            from .identity import resolve_identity
+
+            requested = resolve_identity(
+                engine_name=engine_name,
+                target_url=target_url,
+                proxy=_resolve_default_proxy(),
+            )
+            if self._browser is not None and self._launch_key != requested.launch_key:
+                # One latest-binary session is available on the free license.
+                # Switch serially when a request needs another site identity.
+                self._close_current()
             if self._browser is None:
-                self._start()
-            else:
-                cur = threading.get_ident()
-                if (
-                    self._browser_thread_id is not None
-                    and cur != self._browser_thread_id
-                ):
-                    raise RuntimeError(
-                        f"BrowserPool.page() called from thread {cur} but "
-                        f"the browser was created on thread "
-                        f"{self._browser_thread_id}. Playwright's sync API "
-                        f"is greenlet-bound to its creation thread; route "
-                        f"this call through _to_browser_thread() instead "
-                        f"of asyncio.to_thread()."
-                    )
+                self._start(engine_name=engine_name, target_url=target_url)
             self._calls += 1
             return new_page(self._browser)
 
     def shutdown(self) -> None:
         with self._lock:
-            if self._browser is not None:
-                try:
-                    self._browser.close()
-                except Exception:
-                    pass
-                self._browser = None
-                self._browser_thread_id = None
+            self._close_current()
 
 
 _pool = BrowserPool()
+
+
+def _fanout_uses_browser(engine_names: list[str]) -> bool:
+    """Return whether a fan-out needs the shared licensed browser slot."""
+    for engine_name in engine_names:
+        try:
+            if engine_uses_browser(_get_engine(engine_name)):
+                return True
+        except ValueError:
+            # The worker reports unknown handles in its normal result shape.
+            continue
+    return False
+
+
+async def _run_external_browser_work(fn):
+    """Give subprocess fan-out exclusive ownership of browser sessions.
+
+    The shared pool must be closed on its Playwright thread first. Holding the
+    operation lock until every worker exits prevents a concurrent MCP request
+    from reopening it and exceeding the configured CloakBrowser session cap.
+    """
+    async with _browser_operation_lock():
+        await _run_on_browser_thread(_pool.shutdown)
+        return await asyncio.to_thread(fn)
 
 # Server-level instructions — surfaced to MCP clients in the initialize
 # response. This is the FIRST thing an LLM sees when deciding whether
@@ -456,8 +540,8 @@ async def search(
             For engines that don't accept extras, leave it empty.
         fallback: When True and the query yields zero results (or the
             engine raises), automatically retry through a health-aware
-            fallback chain (DuckDuckGo → Google → Bing → Brave →
-            Startpage → Qwant → Ecosia, reordered by recent reliability).
+            fallback chain (DuckDuckGo → Brave → Startpage → Ecosia →
+            Google → Bing, reordered by recent reliability).
             The user's chosen ``engine`` is *always* tried first.
             The response includes ``fallback_used: bool`` and
             ``attempts: list[{engine, ok, count, ms, error?}]`` for
@@ -491,28 +575,71 @@ async def search(
             "results": [],
         }
 
+    prefetched = None
+    if engine_uses_browser(engine_cls):
+        from .identity import resolve_identity
+
+        planned_identity = resolve_identity(
+            engine_name=getattr(engine_cls, "name", engine),
+            proxy=_resolve_default_proxy(),
+        )
+        prefetched = get_cached_search(
+            getattr(engine_cls, "name", engine),
+            query,
+            limit=limit,
+            options=extra_kwargs,
+            cache_partition=planned_identity.cache_partition,
+            transport="browser",
+        )
+
     def _run() -> list[Any]:
-        page = _pool.page()
+        if prefetched is not None:
+            results = prefetched
+        else:
+            results = None
+        page = None
         try:
-            instance = engine_cls(page)
-            try:
-                results = instance.search(
-                    query, limit=limit, **extra_kwargs) or []
-            except TypeError as te:
-                # Fall back to a vanilla call when the engine doesn't
-                # accept the supplied kwargs, but surface the exact
-                # mismatch so the caller can fix their options dict.
-                if extra_kwargs:
-                    raise TypeError(
-                        f"engine {engine!r} rejected engine_options "
-                        f"{list(extra_kwargs)}: {te}"
-                    ) from te
-                raise
+            if results is None and engine_uses_browser(engine_cls):
+                page = _pool.page(
+                    engine_name=getattr(engine_cls, "name", engine),
+                )
+            if results is None:
+                instance = engine_cls(page)
+                effective_proxy = _resolve_default_proxy()
+                if page is None and hasattr(instance, "set_proxy"):
+                    instance.set_proxy(effective_proxy)
+                if page is None:
+                    from .identity import http_cache_partition
+
+                    partition = http_cache_partition(
+                        getattr(engine_cls, "name", engine),
+                        effective_proxy,
+                    )
+                else:
+                    partition = _pool._launch_key or "browser"
+                try:
+                    results = execute_search(
+                        instance,
+                        query,
+                        limit=limit,
+                        engine_name=getattr(engine_cls, "name", engine),
+                        options=extra_kwargs,
+                        cache_partition=partition,
+                    )
+                except TypeError as te:
+                    # Surface an engine_options mismatch with adapter context.
+                    if extra_kwargs:
+                        raise TypeError(
+                            f"engine {engine!r} rejected engine_options "
+                            f"{list(extra_kwargs)}: {te}"
+                        ) from te
+                    raise
         finally:
-            try:
-                page.close()
-            except Exception:
-                pass
+            if page is not None:
+                try:
+                    page.close()
+                except Exception:
+                    pass
 
         # Inline deep-fetch so the agent's tool result already has the
         # body markdown — saves a round-trip per top hit.
@@ -520,7 +647,7 @@ async def search(
             for r in results[:depth]:
                 if not getattr(r, "url", None):
                     continue
-                ep = _pool.page()
+                ep = _pool.page(target_url=r.url)
                 try:
                     rec = extract_page(
                         ep,
@@ -547,7 +674,12 @@ async def search(
         return results
 
     try:
-        raw = await _to_browser_thread(_run)
+        if prefetched is not None and depth == 0:
+            raw = prefetched
+        elif engine_uses_browser(engine_cls) or depth > 0:
+            raw = await _to_browser_thread(_run)
+        else:
+            raw = await asyncio.to_thread(_run)
     except Exception as e:
         log.exception("[mcp] search failed: %s", e)
         if not fallback:
@@ -567,21 +699,23 @@ async def search(
 
     results = [result_to_dict(r) for r in raw]
 
-    # Fallback path — primary either errored or returned zero results.
-    # Walk down a health-aware chain. Note: the chain runs on its own
-    # browsers (one per fallback attempt) via health.search_with_fallback,
-    # so we route through asyncio.to_thread (it's self-contained — no
-    # touching of _pool's browser).
+    # Fallback owns short-lived worker browsers. Release the shared pool and
+    # hold the global operation slot until the winner cancels its siblings;
+    # otherwise a retained primary session can exhaust the free license.
     if fallback and not results:
-        from .health import search_with_fallback
+        from .health import DEFAULT_CHAIN, search_with_fallback
 
         def _run_fallback() -> dict[str, Any]:
             return search_with_fallback(
-                query, primary=engine, limit=limit, headless=HEADLESS,
+                query,
+                primary=None,
+                limit=limit,
+                chain=[name for name in DEFAULT_CHAIN if name != engine],
+                headless=HEADLESS,
             )
 
         try:
-            fb = await asyncio.to_thread(_run_fallback)
+            fb = await _run_external_browser_work(_run_fallback)
         except Exception as e:
             log.exception("[mcp] fallback chain failed: %s", e)
             fb = {
@@ -592,6 +726,13 @@ async def search(
 
         # If a fallback engine produced results, use those.
         if fb.get("results"):
+            attempts = [{
+                "engine": engine,
+                "ok": False,
+                "count": 0,
+                "ms": 0,
+                "error": primary_error or "primary returned 0 results",
+            }, *fb.get("attempts", [])]
             return {
                 "engine": fb.get("engine") or engine,
                 "query": query,
@@ -600,7 +741,7 @@ async def search(
                 "fallback_used": True,
                 "primary_engine": engine,
                 "primary_error": primary_error,
-                "attempts": fb.get("attempts", []),
+                "attempts": attempts,
             }
         # Whole chain empty.
         return {
@@ -611,7 +752,13 @@ async def search(
             "fallback_used": True,
             "primary_engine": engine,
             "primary_error": primary_error,
-            "attempts": fb.get("attempts", []),
+            "attempts": [{
+                "engine": engine,
+                "ok": False,
+                "count": 0,
+                "ms": 0,
+                "error": primary_error or "primary returned 0 results",
+            }, *fb.get("attempts", [])],
             "error": fb.get("error") or "all fallback engines returned 0 results",
         }
 
@@ -685,7 +832,7 @@ async def extract(
         plus ``links`` / ``images`` when requested.
     """
     def _run() -> dict[str, Any]:
-        page = _pool.page()
+        page = _pool.page(target_url=url)
         try:
             return extract_page(
                 page,
@@ -1063,14 +1210,17 @@ async def find_competitor_ads(
         # Helper that runs one platform query in a fresh page.
         def _query(engine_handle: str, kwargs: dict) -> list[Any]:
             engine_cls = _get_engine(engine_handle)
-            page = _pool.page()
+            page = _pool.page(engine_name=engine_handle)
             try:
                 inst = engine_cls(page)
-                rs = inst.search(
+                rs = execute_search(
+                    inst,
                     kwargs.pop("query", ""),
                     limit=limit,
-                    **kwargs,
-                ) or []
+                    engine_name=engine_handle,
+                    options=kwargs,
+                    cache_partition=_pool._launch_key or "browser",
+                )
             finally:
                 try:
                     page.close()
@@ -1577,7 +1727,7 @@ async def extract_many(
     def _run() -> dict[int, dict[str, Any]]:
         out: dict[int, dict[str, Any]] = {}
         for i, url in cleaned:
-            page = _pool.page()
+            page = _pool.page(target_url=url)
             try:
                 out[i] = extract_page(
                     page,
@@ -1652,14 +1802,10 @@ async def search_many(
       "search both GitHub and StackOverflow for this code error"
       "scholarly search across arxiv + huggingface + semanticscholar"
 
-    Each engine runs in its own browser instance (necessary
-    for Playwright greenlet affinity), so total wall-clock ≈
-    ``max(per-engine time)`` instead of ``sum(per-engine time)``.
-
-    Note this runs *outside* the shared MCP browser pool — each engine
-    in ``engines`` launches a dedicated short-lived browser, so the
-    common ``search`` / ``extract`` tools can still serve other
-    requests in parallel without contention.
+    Direct-HTTP engines run in parallel. Browser engines run in isolated
+    workers but obey ``AGENTSEARCH_BROWSER_CONCURRENCY`` (default 1 for the
+    free CloakBrowser license). The shared MCP browser is released before
+    fan-out and reopened lazily afterward.
 
     Args:
         query: Search query string.
@@ -1669,7 +1815,7 @@ async def search_many(
         limit: Per-engine result cap (default 5). The merged list can
             contain up to ``len(engines) * limit`` URLs.
         timeout_s: Hard deadline for the whole fan-out. Default 90s.
-        max_workers: Concurrent browser limit. Default ``min(len(engines), 8)``.
+        max_workers: Total worker limit. Browser workers are capped separately.
 
     Returns:
         ``{
@@ -1705,11 +1851,9 @@ async def search_many(
             max_workers=max_workers,
         )
 
-    # Use asyncio.to_thread (NOT _to_browser_thread) — search_many launches
-    # its own per-engine browsers and is independent of _pool. Routing it
-    # through the dedicated worker would needlessly serialize it against
-    # the main browser.
     try:
+        if _fanout_uses_browser(list(engines)):
+            return await _run_external_browser_work(_run)
         return await asyncio.to_thread(_run)
     except Exception as e:
         log.exception("[mcp] search_many failed: %s", e)
@@ -1742,9 +1886,9 @@ async def engine_status(
     Read the per-engine HealthLog: success rate, avg result count,
     avg latency, recent ok flag, composite ranking score. Call before
     a costly search if uncertain whether the engine works from the
-    current IP. The log is updated by every ``search(fallback=True)``
-    call — so over time it builds an accurate picture of which
-    engines work reliably from the host's IP / proxy.
+    current IP. The log is updated by regular single- and multi-engine
+    searches, so over time it builds an accurate picture of which engines
+    work reliably from the host's IP / proxy.
 
     Args:
         engines: Restrict to specific engine handles. ``None`` (default)
@@ -1874,7 +2018,7 @@ async def screenshot(
         }
 
     def _run() -> dict[str, Any]:
-        page = _pool.page()
+        page = _pool.page(target_url=url)
         out: dict[str, Any] = {
             "url": url, "status": "error",
             "format": fmt,
@@ -2247,7 +2391,10 @@ async def summarise_news(
         )
 
     try:
-        sm = await asyncio.to_thread(_run_search)
+        if _fanout_uses_browser(src_list):
+            sm = await _run_external_browser_work(_run_search)
+        else:
+            sm = await asyncio.to_thread(_run_search)
     except Exception as e:
         log.exception("[mcp] summarise_news search_many failed: %s", e)
         return {
@@ -2270,7 +2417,7 @@ async def summarise_news(
                 u = item.get("url") or ""
                 if not u:
                     continue
-                page = _pool.page()
+                page = _pool.page(target_url=u)
                 try:
                     rec = extract_page(
                         page, url=u, paginate=True, max_scrolls=2,
@@ -2442,12 +2589,17 @@ async def ads_batch(
 
         def _query(engine_handle: str, kwargs: dict) -> list[Any]:
             engine_cls = _get_engine(engine_handle)
-            page = _pool.page()
+            page = _pool.page(engine_name=engine_handle)
             try:
                 inst = engine_cls(page)
-                return inst.search(
-                    kwargs.pop("query", ""), limit=limit, **kwargs,
-                ) or []
+                return execute_search(
+                    inst,
+                    kwargs.pop("query", ""),
+                    limit=limit,
+                    engine_name=engine_handle,
+                    options=kwargs,
+                    cache_partition=_pool._launch_key or "browser",
+                )
             finally:
                 try:
                     page.close()
@@ -2661,10 +2813,16 @@ async def image_search(
         }
 
     def _run():
-        page = _pool.page()
+        page = _pool.page(engine_name=engine)
         try:
             inst = engine_cls(page)
-            return inst.search(query, limit=limit) or []
+            return execute_search(
+                inst,
+                query,
+                limit=limit,
+                engine_name=engine,
+                cache_partition=_pool._launch_key or "browser",
+            )
         finally:
             try:
                 page.close()
@@ -2704,9 +2862,9 @@ async def image_search_many(
       "cross-search for pictures of X"
       "image search across multiple sources"
 
-    Each engine launches its own browser (Playwright greenlet
-    affinity), so wall-clock ≈ ``max(per-engine time)`` instead of
-    ``sum``. Results are merged + de-duped by ``image_url``.
+    Engines use isolated browser workers while honoring
+    ``AGENTSEARCH_BROWSER_CONCURRENCY``. Results are merged and de-duped by
+    ``image_url``; the shared MCP browser is reopened lazily afterward.
 
     Args:
         query: Free-text search term.
@@ -2734,14 +2892,16 @@ async def image_search_many(
 
     src_list = list(engines) if engines else list(_IMAGE_ENGINES_DEFAULT)
     try:
-        return await asyncio.to_thread(
-            search_images_many,
-            query,
-            src_list,
-            limit=limit,
-            headless=HEADLESS,
-            timeout_s=timeout_s,
-        )
+        def _run() -> dict[str, Any]:
+            return search_images_many(
+                query,
+                src_list,
+                limit=limit,
+                headless=HEADLESS,
+                timeout_s=timeout_s,
+            )
+
+        return await _run_external_browser_work(_run)
     except Exception as e:
         log.exception("[mcp] image_search_many failed: %s", e)
         return {

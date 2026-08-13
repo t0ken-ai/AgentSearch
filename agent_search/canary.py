@@ -30,14 +30,18 @@ import os
 import shutil
 import subprocess
 import sys
+import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from contextlib import nullcontext
 from pathlib import Path
 
 from .cli import _engine_registry, _get_engine
 from .core import BrowserConfig, launch, new_page
+from .policies import browser_concurrency_limit, engine_uses_browser, max_parallelism
 
 log = logging.getLogger(__name__)
+_BROWSER_SLOTS = threading.BoundedSemaphore(browser_concurrency_limit())
 
 # Canary queries per engine — one per. Picked to be uncontroversial,
 # popular, and unlikely to return zero results on a healthy SERP.
@@ -303,19 +307,39 @@ def run_one_engine(engine_name: str, query: str, limit: int, timeout_s: int) -> 
     browser = None
     results = []
     error = ""
-    try:
-        browser = launch(BrowserConfig(headless=True, humanize=True))
-        page = new_page(browser)
-        instance = engine_cls(page)
-        results = instance.search(query, limit=limit) or []
-    except Exception as e:
-        error = f"{type(e).__name__}: {e}"
-    finally:
-        if browser is not None:
-            try:
-                browser.close()
-            except Exception:
-                pass
+    uses_browser = engine_uses_browser(engine_cls)
+    with _BROWSER_SLOTS if uses_browser else nullcontext():
+        try:
+            from .runtime import execute_search
+
+            if uses_browser:
+                browser = launch(BrowserConfig(
+                    headless=True,
+                    engine_name=getattr(engine_cls, "name", engine_name),
+                ))
+                page = new_page(browser)
+                identity = getattr(browser, "_agentsearch_identity", None)
+                partition = identity.cache_partition if identity else "browser"
+            else:
+                page = None
+                partition = "http-public"
+            instance = engine_cls(page)
+            results = execute_search(
+                instance,
+                query,
+                limit=limit,
+                engine_name=getattr(engine_cls, "name", engine_name),
+                cache_partition=partition,
+                use_cache=False,
+            )
+        except Exception as e:
+            error = f"{type(e).__name__}: {e}"
+        finally:
+            if browser is not None:
+                try:
+                    browser.close()
+                except Exception:
+                    pass
 
     elapsed = round(time.time() - started, 2)
     if error:
@@ -371,7 +395,7 @@ def main():
 
     rows: list[dict] = []
     started = time.time()
-    with ThreadPoolExecutor(max_workers=args.parallel) as ex:
+    with ThreadPoolExecutor(max_workers=max_parallelism(args.parallel)) as ex:
         futs = {
             ex.submit(
                 run_one_engine,

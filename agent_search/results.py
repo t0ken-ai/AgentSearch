@@ -68,3 +68,20 @@ def result_to_dict(result: Any) -> dict[str, Any]:
         raise TypeError(
             f"cannot serialize result of type {type(result).__name__}"
         ) from exc
+
+
+def result_from_dict(payload: Mapping[str, Any]) -> SearchResult:
+    """Rehydrate cached data while preserving adapter extension fields."""
+    base_names = {"title", "url", "snippet", "score", "published_date"}
+    base = {name: payload.get(name) for name in base_names if name in payload}
+    result = SearchResult(
+        title=str(base.get("title") or ""),
+        url=str(base.get("url") or ""),
+        snippet=str(base.get("snippet") or ""),
+        score=base.get("score"),
+        published_date=str(base.get("published_date") or ""),
+    )
+    for name, value in payload.items():
+        if name not in base_names:
+            setattr(result, name, value)
+    return result

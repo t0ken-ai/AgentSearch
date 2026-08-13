@@ -5,13 +5,11 @@ API
 ``https://export.arxiv.org/api/query?search_query=all:<query>&start=0&max_results=<n>&sortBy=relevance``
 returns Atom XML. Public, no auth, documented at
 https://info.arxiv.org/help/api/user-manual.html — we honour the
-recommended 3-second courtesy delay by setting ``max_retries = 1`` and
-keeping our request rate at 1 search per call.
+recommended 3-second courtesy interval with a cross-process request gate,
+plus a short query cache and a single attempt.
 
-Same trick as ``pubmed.py``: rather than using ``urllib.request`` (which
-hits the local TLS interception store), we navigate ``page`` to the
-arxiv origin and use ``page.evaluate`` to ``fetch()`` the Atom feed —
-that way TLS goes through the Chromium chain.
+The public Atom feed is fetched through a proxy-aware HTTP session. It does
+not need Chromium or browser fingerprinting.
 
 Each :class:`SearchResult` carries:
 
@@ -30,12 +28,12 @@ import re
 import urllib.parse
 import xml.etree.ElementTree as ET
 
-from ..core import safe_goto, human_delay
-from .base import BaseEngine, SearchResult
+from .. import __version__
+from ..rate_limit import wait_for_request_slot
+from .base import HttpEngine, SearchResult
 
 log = logging.getLogger(__name__)
 
-ARXIV_HOME = "https://export.arxiv.org/"
 ARXIV_API = "https://export.arxiv.org/api/query"
 
 ATOM_NS = {
@@ -44,10 +42,9 @@ ATOM_NS = {
 }
 
 ABS_URL_RE = re.compile(r"https?://arxiv\.org/abs/([0-9.]+(?:v\d+)?)")
-PDF_URL_RE = re.compile(r"https?://arxiv\.org/pdf/([0-9.]+(?:v\d+)?)")
 
 
-class ArxivEngine(BaseEngine):
+class ArxivEngine(HttpEngine):
     """arXiv search via the official Atom API."""
 
     name = "arxiv"
@@ -58,13 +55,9 @@ class ArxivEngine(BaseEngine):
         self.last_status: dict = {}
 
     def _do_search(self, query: str, limit: int) -> list[SearchResult]:
-        # 1) Prime the page on arxiv origin so fetch() shares its TLS chain.
-        if not safe_goto(self.page, ARXIV_HOME, timeout=20000, retries=1):
-            log.warning("[arxiv] failed to reach origin")
-            return []
-        human_delay(0.4, 0.9)
-
-        # 2) Build API URL.
+        # One direct request avoids Chromium startup. The cross-process gate
+        # delays only consecutive calls, satisfying arXiv's 3-second courtesy
+        # rule without charging the first request a fixed sleep.
         params = {
             "search_query": f"all:{query}",
             "start": "0",
@@ -75,28 +68,19 @@ class ArxivEngine(BaseEngine):
         api_url = f"{ARXIV_API}?{urllib.parse.urlencode(params)}"
         log.info("[arxiv] fetching %s", api_url)
 
-        # 3) Fetch via page.evaluate so we use Chromium TLS.
         try:
-            resp = self.page.evaluate(
-                """async (url) => {
-                  const r = await fetch(url, {credentials: 'omit'});
-                  return {ok: r.ok, status: r.status, text: await r.text()};
-                }""",
+            wait_for_request_slot("export.arxiv.org", 3.0)
+            response = self.http_get(
                 api_url,
+                headers={
+                    "Accept": "application/atom+xml",
+                    "User-Agent": f"AgentSearch/{__version__}",
+                },
             )
         except Exception as e:
-            log.warning("[arxiv] fetch raised: %s", e)
+            log.warning("[arxiv] request raised: %s", e)
             return []
-
-        if not (resp and resp.get("ok")):
-            log.warning("[arxiv] HTTP %s", resp and resp.get("status"))
-            self.last_status = {
-                "url": api_url,
-                "http_status": resp and resp.get("status"),
-            }
-            return []
-
-        text = resp.get("text") or ""
+        text = response.text
         try:
             root = ET.fromstring(text)
         except ET.ParseError as e:
@@ -107,7 +91,7 @@ class ArxivEngine(BaseEngine):
         self.last_status = {
             "url": api_url,
             "entries": len(entries),
-            "http_status": resp.get("status"),
+            "http_status": response.status_code,
         }
 
         results: list[SearchResult] = []

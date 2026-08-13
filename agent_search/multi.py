@@ -6,11 +6,13 @@ A typical agent research turn needs hits from several complementary engines
 ``search`` command means launching N Chromiums and waiting end-to-end for
 each — a ~10-15s tax for three engines.
 
-This module runs engines concurrently in isolated worker processes. Each
-worker owns its browser, which preserves Playwright's thread affinity and
-lets the supervisor terminate a stuck browser at the requested deadline.
-Thread pools cannot provide that guarantee: Python cannot cancel a running
-thread, and ``ThreadPoolExecutor`` waits for its workers during shutdown.
+This module runs engines in isolated worker processes. Direct-HTTP adapters
+run concurrently; browser workers also obey the configured licensed-session
+budget (one by default). Each browser worker owns its process, which preserves
+Playwright affinity and lets the supervisor terminate a stuck browser at the
+requested deadline. Thread pools cannot provide that guarantee: Python cannot
+cancel a running thread, and ``ThreadPoolExecutor`` waits for its workers
+during shutdown.
 """
 
 from __future__ import annotations
@@ -27,12 +29,29 @@ from multiprocessing.connection import wait
 from typing import Any
 from urllib.parse import urlparse, urlunparse
 
-from .core import BrowserConfig, launch, new_page
+from .core import BrowserConfig, environment_proxy_url, launch, new_page
+from .policies import (
+    browser_concurrency_limit,
+    engine_uses_browser,
+    max_parallelism,
+)
 from .results import result_to_dict
+from .runtime import execute_search, get_cached_search, search_metrics
 
 log = logging.getLogger(__name__)
 
 EngineRunner = Callable[[str, str, int, bool], dict[str, Any]]
+BrowserClassifier = Callable[[str], bool]
+
+
+def _engine_requires_browser(engine_name: str) -> bool:
+    """Resolve transport in the supervisor before spending a worker slot."""
+    from .cli import _get_engine
+
+    try:
+        return engine_uses_browser(_get_engine(engine_name))
+    except ValueError:
+        return False
 
 
 def _start_method_for_main(
@@ -84,16 +103,63 @@ def _run_one_engine(
 
     browser = None
     try:
-        browser = launch(BrowserConfig(headless=headless, humanize=True))
-        page = new_page(browser)
-        instance = engine_cls(page)
-        raw = instance.search(query, limit=limit) or []
+        effective_proxy = environment_proxy_url()
+        if engine_uses_browser(engine_cls):
+            from .identity import resolve_identity
+
+            planned = resolve_identity(
+                engine_name=getattr(engine_cls, "name", engine_name),
+                proxy=effective_proxy,
+            )
+            cached = get_cached_search(
+                getattr(engine_cls, "name", engine_name),
+                query,
+                limit=limit,
+                options=None,
+                cache_partition=planned.cache_partition,
+                transport="browser",
+            )
+            if cached is not None:
+                return {
+                    "engine": engine_name,
+                    "ok": True,
+                    "count": len(cached),
+                    "results": [result_to_dict(r) for r in cached],
+                    "elapsed_s": round(time.time() - started, 2),
+                    "metrics": {"transport": "browser", "cache_hit": True},
+                }
+            browser = launch(BrowserConfig(
+                headless=headless,
+                engine_name=getattr(engine_cls, "name", engine_name),
+                proxy=effective_proxy,
+            ))
+            instance = engine_cls(new_page(browser))
+            identity = getattr(browser, "_agentsearch_identity", None)
+            partition = identity.cache_partition if identity else "browser"
+        else:
+            instance = engine_cls(None)
+            if hasattr(instance, "set_proxy"):
+                instance.set_proxy(effective_proxy)
+            from .identity import http_cache_partition
+
+            partition = http_cache_partition(
+                getattr(engine_cls, "name", engine_name),
+                effective_proxy,
+            )
+        raw = execute_search(
+            instance,
+            query,
+            limit=limit,
+            engine_name=getattr(engine_cls, "name", engine_name),
+            cache_partition=partition,
+        )
         return {
             "engine": engine_name,
             "ok": True,
             "count": len(raw),
             "results": [result_to_dict(r) for r in raw],
             "elapsed_s": round(time.time() - started, 2),
+            "metrics": search_metrics(instance),
         }
     except Exception as e:  # noqa: BLE001 — we explicitly want the union of failures
         log.warning("[multi] engine %s failed: %s", engine_name, e)
@@ -147,16 +213,52 @@ def _run_one_image_engine(
 
     browser = None
     try:
-        browser = launch(BrowserConfig(headless=headless, humanize=True))
+        from .identity import resolve_identity
+
+        effective_proxy = environment_proxy_url()
+        planned = resolve_identity(
+            engine_name=getattr(engine_cls, "name", engine_name),
+            proxy=effective_proxy,
+        )
+        cached = get_cached_search(
+            getattr(engine_cls, "name", engine_name),
+            query,
+            limit=limit,
+            options=None,
+            cache_partition=planned.cache_partition,
+            transport="browser",
+        )
+        if cached is not None:
+            return {
+                "engine": engine_name,
+                "ok": True,
+                "count": len(cached),
+                "results": [result_to_dict(result) for result in cached],
+                "elapsed_s": round(time.time() - started, 2),
+                "metrics": {"transport": "browser", "cache_hit": True},
+            }
+        browser = launch(BrowserConfig(
+            headless=headless,
+            engine_name=getattr(engine_cls, "name", engine_name),
+            proxy=effective_proxy,
+        ))
         page = new_page(browser)
         instance = engine_cls(page)
-        raw = instance.search(query, limit=limit) or []
+        identity = getattr(browser, "_agentsearch_identity", None)
+        raw = execute_search(
+            instance,
+            query,
+            limit=limit,
+            engine_name=getattr(engine_cls, "name", engine_name),
+            cache_partition=(identity.cache_partition if identity else "browser"),
+        )
         return {
             "engine": engine_name,
             "ok": True,
             "count": len(raw),
             "results": [result_to_dict(result) for result in raw],
             "elapsed_s": round(time.time() - started, 2),
+            "metrics": search_metrics(instance),
         }
     except Exception as exc:  # adapters and browser transports fail alike
         log.warning("[multi] image engine %s failed: %s", engine_name, exc)
@@ -183,6 +285,7 @@ def _worker_process(
     query: str,
     limit: int,
     headless: bool,
+    health_path: str | None,
 ) -> None:
     """Run one engine in an isolated process and send one result payload.
 
@@ -192,6 +295,11 @@ def _worker_process(
     parent's process group.
     """
     group_isolated = False
+    if health_path:
+        # Runtime health recording happens inside this worker. Passing the
+        # caller's path preserves custom HealthLog instances without parent
+        # and child both recording the same attempt.
+        os.environ["AGENTSEARCH_HEALTH_PATH"] = health_path
     if os.name == "posix" and hasattr(os, "setsid"):
         try:
             os.setsid()
@@ -292,6 +400,19 @@ def _timeout_result(engine_name: str, timeout_s: float) -> dict[str, Any]:
     }
 
 
+def _cancelled_result(engine_name: str, winner: str) -> dict[str, Any]:
+    """Return an explicit hedge cancellation instead of mislabeling timeout."""
+    return {
+        "engine": engine_name,
+        "ok": False,
+        "error": f"cancelled after {winner} returned results",
+        "count": 0,
+        "results": [],
+        "elapsed_s": 0.0,
+        "cancelled": True,
+    }
+
+
 def _run_process_fanout(
     engine_names: list[str],
     query: str,
@@ -301,6 +422,11 @@ def _run_process_fanout(
     max_workers: int,
     *,
     runner: EngineRunner = _run_one_engine,
+    browser_classifier: BrowserClassifier | None = None,
+    max_browser_workers: int | None = None,
+    hedge_delay_s: float = 0.0,
+    stop_on_first_success: bool = False,
+    health_path: str | None = None,
 ) -> tuple[dict[str, dict[str, Any]], bool]:
     """Supervise isolated engine workers until completion or deadline.
 
@@ -320,14 +446,45 @@ def _run_process_fanout(
     active: dict[str, dict[str, Any]] = {}
     per_engine: dict[str, dict[str, Any]] = {}
     deadline = time.monotonic() + max(0.0, timeout_s)
+    browser_budget = max_browser_workers or browser_concurrency_limit()
+    next_hedge_at = time.monotonic()
+    winner: str | None = None
 
     def start_available() -> None:
+        nonlocal next_hedge_at
         while pending and len(active) < max_workers and time.monotonic() < deadline:
+            if hedge_delay_s > 0 and active and time.monotonic() < next_hedge_at:
+                break
+            active_browsers = sum(
+                bool(state.get("uses_browser")) for state in active.values()
+            )
+            selected_index = None
+            selected_uses_browser = False
+            for index, candidate in enumerate(pending):
+                uses_browser = bool(
+                    browser_classifier and browser_classifier(candidate)
+                )
+                if not uses_browser or active_browsers < browser_budget:
+                    selected_index = index
+                    selected_uses_browser = uses_browser
+                    break
+            if selected_index is None:
+                break
+            pending.rotate(-selected_index)
             name = pending.popleft()
+            pending.rotate(selected_index)
             recv_conn, send_conn = context.Pipe(duplex=False)
             process = context.Process(
                 target=_worker_process,
-                args=(send_conn, runner, name, query, limit, headless),
+                args=(
+                    send_conn,
+                    runner,
+                    name,
+                    query,
+                    limit,
+                    headless,
+                    health_path,
+                ),
                 name=f"agentsearch-{name}",
             )
             try:
@@ -349,7 +506,11 @@ def _run_process_fanout(
                 "process": process,
                 "connection": recv_conn,
                 "group_isolated": False,
+                "uses_browser": selected_uses_browser,
             }
+            if hedge_delay_s > 0:
+                next_hedge_at = time.monotonic() + hedge_delay_s
+                break
 
     start_available()
     while active or pending:
@@ -399,6 +560,25 @@ def _run_process_fanout(
                     process, group_isolated=state["group_isolated"]
                 )
             del active[name]
+            if (
+                stop_on_first_success
+                and per_engine[name].get("ok")
+                and per_engine[name].get("count")
+            ):
+                per_engine[name]["winner"] = True
+                winner = name
+                break
+
+        if winner is not None:
+            _terminate_workers(list(active.values()))
+            for name, state in list(active.items()):
+                state["connection"].close()
+                per_engine[name] = _cancelled_result(name, winner)
+            for name in pending:
+                per_engine[name] = _cancelled_result(name, winner)
+            active.clear()
+            pending.clear()
+            break
 
         # Detect crashes whose pipe never produced a readable payload.
         for name, state in list(active.items()):
@@ -542,6 +722,7 @@ def search_many(
     engines = unique
 
     workers = max_workers or min(len(engines), 8)
+    workers = max_parallelism(workers)
     workers = max(1, min(int(workers), len(engines)))
     timeout_s = max(0.0, float(timeout_s))
     started = time.time()
@@ -552,6 +733,7 @@ def search_many(
         headless,
         timeout_s,
         workers,
+        browser_classifier=_engine_requires_browser,
     )
 
     merged = merge_results(per_engine)
@@ -565,6 +747,59 @@ def search_many(
         "successful": sum(1 for v in per_engine.values() if v.get("ok") and v.get("count")),
         "timed_out": sum(1 for v in per_engine.values() if v.get("timed_out")),
         "deadline_reached": deadline_reached,
+    }
+
+
+def race_search(
+    query: str,
+    engines: list[str],
+    *,
+    limit: int = 10,
+    headless: bool = True,
+    timeout_s: float = 45.0,
+    hedge_delay_s: float = 1.25,
+    max_workers: int = 3,
+    health_path: str | None = None,
+) -> dict[str, Any]:
+    """Hedge fallbacks and stop remaining workers on the first useful result.
+
+    The next engine starts only after ``hedge_delay_s`` while the previous one
+    is still pending. Browser launches still honor the licensed session limit;
+    direct HTTP adapters can race without consuming that scarce resource.
+    """
+    unique = list(dict.fromkeys(engines))
+    if not unique:
+        return {
+            "query": query,
+            "engine": None,
+            "results": [],
+            "per_engine": {},
+            "deadline_reached": False,
+        }
+    started = time.time()
+    per_engine, deadline_reached = _run_process_fanout(
+        unique,
+        query,
+        max(1, int(limit)),
+        headless,
+        max(0.0, float(timeout_s)),
+        max(1, min(int(max_workers), len(unique))),
+        browser_classifier=_engine_requires_browser,
+        hedge_delay_s=max(0.0, float(hedge_delay_s)),
+        stop_on_first_success=True,
+        health_path=health_path,
+    )
+    winner = next(
+        (name for name, payload in per_engine.items() if payload.get("winner")),
+        None,
+    )
+    return {
+        "query": query,
+        "engine": winner,
+        "results": per_engine[winner]["results"] if winner else [],
+        "per_engine": per_engine,
+        "deadline_reached": deadline_reached,
+        "elapsed_s": round(time.time() - started, 2),
     }
 
 
@@ -598,6 +833,7 @@ def search_images_many(
 
     unique = list(dict.fromkeys(engines))
     workers = max_workers or min(len(unique), 6)
+    workers = max_parallelism(workers)
     workers = max(1, min(int(workers), len(unique)))
     timeout_s = max(0.0, float(timeout_s))
     started = time.time()
@@ -609,6 +845,7 @@ def search_images_many(
         timeout_s,
         workers,
         runner=_run_one_image_engine,
+        browser_classifier=lambda _name: True,
     )
 
     # Image URLs are often signed or contain meaningful resize parameters;

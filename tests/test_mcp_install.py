@@ -147,6 +147,7 @@ def main():
         except Exception:
             try:
                 proc.kill()
+                proc.wait(timeout=5)
             except Exception:
                 pass
         # Drain stderr for diagnostic
@@ -157,6 +158,11 @@ def main():
                 print(err[-800:])
         except Exception:
             pass
+        for stream in (proc.stdout, proc.stderr):
+            try:
+                stream.close()
+            except Exception:
+                pass
 
 
 if __name__ == "__main__":
