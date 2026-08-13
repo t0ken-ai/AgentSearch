@@ -8,7 +8,8 @@ dynamic = ["version"]
 description = "AgentSearch — local stealth-browser web search across 100+ sites for AI agents. No API keys, no third-party servers."
 requires-python = ">=3.12"
 dependencies = [
-    "cloakbrowser>=0.3.31",
+    # geoip keeps timezone, locale, and WebRTC aligned with proxy egress.
+    "cloakbrowser[geoip]>=0.5.7",
     "trafilatura>=2.0",
     "pdfplumber>=0.11",
     "requests>=2.30",
