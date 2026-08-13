@@ -6,11 +6,11 @@
 
 # **Grátis · Local · Privado · Burla Cloudflare**
 
-**Um pacote Python. 90+ sites. Zero chaves de API. Zero vazamento de dados.**
+**Um pacote Python. 100+ sites. Zero chaves de API. Zero vazamento de dados.**
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
-[![Python 3.9+](https://img.shields.io/badge/Python-3.9+-blue.svg)](https://www.python.org/)
-[![Sites: 90+](https://img.shields.io/badge/Sites-90%2B-success.svg)]()
+[![Python 3.12+](https://img.shields.io/badge/Python-3.12+-blue.svg)](https://www.python.org/)
+[![Sites: 100+](https://img.shields.io/badge/Sites-100%2B-success.svg)]()
 [![Sem API Key](https://img.shields.io/badge/Sem-API%20Key-success.svg)]()
 [![Local](https://img.shields.io/badge/Dados-Ficam%20na%20sua%20m%C3%A1quina-orange.svg)]()
 
@@ -25,7 +25,7 @@
 ```bash
 pip install cloakbrowser && pip install -e .
 
-# Buscar em qualquer um dos 90+ motores
+# Buscar em qualquer um dos 100+ motores
 agentsearch search "eleições 2026"           --engine g1     --limit 5
 agentsearch search "reforma tributária"      --engine terra  --limit 5
 agentsearch search "Copa do Mundo 2026"      --engine google --limit 5
@@ -34,7 +34,7 @@ agentsearch search "Copa do Mundo 2026"      --engine google --limit 5
 agentsearch search "Lula reforma" --engine g1 --limit 5 --depth 3 --json
 ```
 
-90 sites stealth · CLI · servidor MCP · API HTTP · roda 100% na sua máquina. **Burla Cloudflare, PerimeterX, Akamai, DataDome.**
+100+ sites stealth · CLI · servidor MCP · API HTTP · roda 100% na sua máquina. **Burla Cloudflare, PerimeterX, Akamai, DataDome.**
 
 ---
 
@@ -101,7 +101,7 @@ pip install cloakbrowser
 pip install -e .
 ```
 
-Requer Python 3.9+. Na primeira execução o CloakBrowser (Chromium stealth) baixa automaticamente.
+Requer Python 3.12+. Na primeira execução o CloakBrowser (Chromium stealth) baixa automaticamente.
 
 ---
 
@@ -121,7 +121,7 @@ Adicione ao `~/.kiro/settings/mcp.json` (ou ao equivalente no Cursor / Claude De
 }
 ```
 
-Ferramentas expostas: `search`, `extract`, `extract_many`, `list_engines`, `list_dev_docs_platforms`, `search_app`, `lookup_app`, `find_competitor_ads`, `download_ad_media`.
+18 ferramentas expostas: `search`, `extract`, `extract_many`, `list_engines`, `list_dev_docs_platforms`, `search_app`, `lookup_app`, `find_competitor_ads`, `download_ad_media`, `search_many`, `engine_status`, `screenshot`, `download_files`, `summarise_news`, `ads_batch`, `image_search`, `image_search_many`, `download_images`.
 
 ---
 
@@ -131,4 +131,4 @@ Tudo o que **não** está aqui (referência completa de motores, opções de fil
 
 ---
 
-*Um pacote Python · 90+ motores de busca · 142 plataformas de docs · 5 bibliotecas de anúncios · App Store · 9 ferramentas MCP — tudo local, sem chaves de API.*
+*Um pacote Python · 100+ motores de busca · 142 plataformas de docs · 5 bibliotecas de anúncios · App Store · 18 ferramentas MCP — tudo local, sem chaves de API.*

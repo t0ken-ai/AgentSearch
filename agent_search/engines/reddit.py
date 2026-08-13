@@ -23,6 +23,7 @@ import re
 import time
 import urllib.parse
 
+from .. import __version__
 from ..core import safe_goto, human_delay
 from .base import BaseEngine, SearchResult
 
@@ -713,7 +714,7 @@ class RedditEngine(BaseEngine):
                         "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) "
                                        "AppleWebKit/537.36 (KHTML, like Gecko) "
                                        "Chrome/142.0.0.0 Safari/537.36 "
-                                       "AgentSearch/1.0",
+                                       f"AgentSearch/{__version__}",
                     },
                     timeout=20000,
                 )

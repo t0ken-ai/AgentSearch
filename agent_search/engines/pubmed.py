@@ -32,6 +32,7 @@ import logging
 from urllib.parse import urlencode
 from xml.etree import ElementTree as ET
 
+from .. import __version__
 from .base import BaseEngine, SearchResult
 
 log = logging.getLogger(__name__)
@@ -47,7 +48,7 @@ class PubMedEngine(BaseEngine):
     ARTICLE_URL = "https://pubmed.ncbi.nlm.nih.gov/{pmid}/"
 
     USER_AGENT = (
-        "AgentSearch/0.1 (PubMed adapter; "
+        f"AgentSearch/{__version__} (PubMed adapter; "
         "https://github.com/AgentSearch)"
     )
 

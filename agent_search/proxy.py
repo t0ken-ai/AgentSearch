@@ -54,6 +54,8 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field, asdict
 from pathlib import Path
 
+from . import __version__
+
 log = logging.getLogger(__name__)
 
 
@@ -347,7 +349,9 @@ class ProxyPool:
             try:
                 req = urllib.request.Request(
                     url,
-                    headers={"User-Agent": "AgentSearch/1.0 proxy-fetcher"},
+                    headers={
+                        "User-Agent": f"AgentSearch/{__version__} proxy-fetcher"
+                    },
                 )
                 with urllib.request.urlopen(req, timeout=timeout, context=_SSL_CTX) as resp:
                     body = resp.read().decode("utf-8", errors="replace")
@@ -436,7 +440,7 @@ class ProxyPool:
         })
         opener = urllib.request.build_opener(proxy_handler)
         opener.addheaders = [
-            ("User-Agent", "AgentSearch/1.0 proxy-test"),
+            ("User-Agent", f"AgentSearch/{__version__} proxy-test"),
         ]
         started = time.time()
         try:

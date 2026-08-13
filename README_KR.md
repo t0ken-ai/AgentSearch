@@ -6,11 +6,11 @@
 
 # **무료 · 로컬 · 프라이빗 · Cloudflare 우회**
 
-**파이썬 패키지 하나. 90+ 사이트. API 키 0개. 데이터 유출 0건.**
+**파이썬 패키지 하나. 100+ 사이트. API 키 0개. 데이터 유출 0건.**
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
-[![Python 3.9+](https://img.shields.io/badge/Python-3.9+-blue.svg)](https://www.python.org/)
-[![Sites: 90+](https://img.shields.io/badge/Sites-90%2B-success.svg)]()
+[![Python 3.12+](https://img.shields.io/badge/Python-3.12+-blue.svg)](https://www.python.org/)
+[![Sites: 100+](https://img.shields.io/badge/Sites-100%2B-success.svg)]()
 [![No API Key](https://img.shields.io/badge/API_Key-불필요-success.svg)]()
 [![Local Only](https://img.shields.io/badge/데이터-내_PC에만-orange.svg)]()
 
@@ -25,7 +25,7 @@
 ```bash
 pip install cloakbrowser && pip install -e .
 
-# 90+ 사이트 어디든 검색
+# 100+ 사이트 어디든 검색
 agentsearch search "삼성전자 신제품"     --engine naver  --limit 5
 agentsearch search "카카오 주가"          --engine daum   --limit 5
 agentsearch search "react hooks 튜토리얼" --engine google --limit 5
@@ -105,7 +105,7 @@ pip install cloakbrowser
 pip install -e .
 ```
 
-Python 3.9+ 필요. 최초 실행 시 CloakBrowser(스텔스 Chromium)가 자동 다운로드됩니다.
+Python 3.12+ 필요. 최초 실행 시 CloakBrowser(스텔스 Chromium)가 자동 다운로드됩니다.
 
 ---
 
@@ -125,7 +125,7 @@ Python 3.9+ 필요. 최초 실행 시 CloakBrowser(스텔스 Chromium)가 자동
 }
 ```
 
-노출 도구: `search`, `extract`, `extract_many`, `list_engines`, `list_dev_docs_platforms`, `search_app`, `lookup_app`, `find_competitor_ads`, `download_ad_media`.
+제공되는 18개 도구: `search`, `extract`, `extract_many`, `list_engines`, `list_dev_docs_platforms`, `search_app`, `lookup_app`, `find_competitor_ads`, `download_ad_media`, `search_many`, `engine_status`, `screenshot`, `download_files`, `summarise_news`, `ads_batch`, `image_search`, `image_search_many`, `download_images`.
 
 ---
 
@@ -135,4 +135,4 @@ Python 3.9+ 필요. 최초 실행 시 CloakBrowser(스텔스 Chromium)가 자동
 
 ---
 
-*Python 패키지 1개 · 90+ 검색 엔진 · 142개 개발자 문서 · 5개 광고 라이브러리 · 앱스토어 · 9개 MCP 도구 — 모두 로컬, API 키 불필요.*
+*Python 패키지 1개 · 100+ 검색 엔진 · 142개 개발자 문서 · 5개 광고 라이브러리 · 앱스토어 · 18개 MCP 도구 — 모두 로컬, API 키 불필요.*

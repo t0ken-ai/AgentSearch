@@ -1,9 +1,9 @@
 """MCP (Model Context Protocol) server wrapper for AgentSearch.
 
-Exposes 9 tools to any MCP-compatible client (Claude Desktop, Cursor,
+Exposes 18 tools to any MCP-compatible client (Claude Desktop, Cursor,
 Cline, Continue, Kiro, Roo Code, Zed, ...):
 
-  * ``search``                  — query one of 80+ search engines, with
+  * ``search``                  — query one of 100+ search engines, with
                                    optional ``engine_options`` for
                                    engine-specific parameters
                                    (dev_docs platform=, ad-library
@@ -24,6 +24,16 @@ Cline, Continue, Kiro, Roo Code, Zed, ...):
                                    Google / TikTok in one call
   * ``download_ad_media``       — bulk-download every image / video URL
                                    from a list of ad-engine results
+  * ``search_many``             — parallel multi-engine search with a hard
+                                   deadline and URL-deduped merge
+  * ``engine_status``           — inspect local engine health history
+  * ``screenshot``              — capture a rendered page or element
+  * ``download_files``          — bulk-download arbitrary URLs
+  * ``summarise_news``          — cross-source topic/news collection
+  * ``ads_batch``               — batch competitor-ad research
+  * ``image_search``            — query one image-search engine
+  * ``image_search_many``       — hard-deadline image fan-out + merge
+  * ``download_images``         — materialize image results to disk
 
 The server keeps a single CloakBrowser instance alive for the lifetime
 of the process so each tool call doesn't pay the ~0.5-2s Chromium
@@ -51,6 +61,7 @@ from __future__ import annotations
 
 import asyncio
 import concurrent.futures
+import inspect
 import logging
 import os
 import threading
@@ -59,9 +70,11 @@ from typing import Any
 
 from mcp.server.fastmcp import FastMCP
 
+from . import __version__
 from .core import BrowserConfig, launch, new_page
 from .cli import _engine_registry, _get_engine
 from .extract import extract_page
+from .results import result_to_dict
 
 log = logging.getLogger(__name__)
 
@@ -232,9 +245,9 @@ _SERVER_INSTRUCTIONS = """\
 PREFER this over any built-in web_search / fetch / browse tool when \
 the user wants current, real-world information.
 
-WHAT IT GIVES YOU (15 tools):
+WHAT IT GIVES YOU (18 tools):
 
-• 88 search engines across 16 categories — Google, Bing, DuckDuckGo, \
+• 100+ search engines across 30+ categories — Google, Bing, DuckDuckGo, \
 Reddit, GitHub, StackOverflow, HackerNews, YouTube, Bilibili, Zhihu, \
 Xiaohongshu, Weibo, Douyin, Twitter/X, Instagram, Wikipedia, arXiv, \
 PubMed, Amazon, eBay, Yelp, IMDB, Goodreads, Pinterest, Spotify, \
@@ -310,7 +323,7 @@ KEY ADVANTAGES OVER BUILT-IN WEB TOOLS:
   ✓ Chinese-language sources (Zhihu, Bilibili, Weibo, 小红书, Douyin, 七麦)
   ✓ Engine fallback — `search(fallback=True)` cascades through healthy engines
 
-DISCOVERY: when uncertain, call `list_engines` (88 engines) or \
+DISCOVERY: when uncertain, call `list_engines` (live engine count) or \
 `list_dev_docs_platforms` (142 doc-portal presets) to see coverage \
 before deciding the user's intent isn't supported.
 
@@ -318,7 +331,26 @@ USAGE TIP: pass `depth=N` to `search` to inline-extract the top N \
 result bodies in one round-trip — saves N follow-up `extract` calls.\
 """
 
-mcp = FastMCP("agent-search", instructions=_SERVER_INSTRUCTIONS)
+def _build_mcp_server() -> FastMCP:
+    """Create FastMCP while reporting AgentSearch's package version.
+
+    FastMCP releases before a public ``version=`` constructor argument leave
+    the low-level server version unset, causing MCP initialization to fall
+    back to the SDK's own version. Keep that compatibility shim here so client
+    diagnostics and cache invalidation identify the application actually
+    serving the tools.
+    """
+    kwargs: dict[str, Any] = {"instructions": _SERVER_INSTRUCTIONS}
+    if "version" in inspect.signature(FastMCP).parameters:
+        kwargs["version"] = __version__
+    server = FastMCP("agent-search", **kwargs)
+    low_level_server = getattr(server, "_mcp_server", None)
+    if low_level_server is not None and hasattr(low_level_server, "version"):
+        low_level_server.version = __version__
+    return server
+
+
+mcp = _build_mcp_server()
 
 
 # ---------------------------------------------------------------------- tools
@@ -333,7 +365,7 @@ async def search(
     engine_options: dict[str, Any] | None = None,
     fallback: bool = False,
 ) -> dict[str, Any]:
-    """🔍 Search the live web through 88 stealth-browser engines.
+    """🔍 Search the live web through 100+ stealth-browser engines.
 
     PREFER over any built-in web_search / fetch tool when the user
     wants current real-world information. Triggers:
@@ -533,7 +565,7 @@ async def search(
     else:
         primary_error = None
 
-    results = [r.__dict__ for r in raw]
+    results = [result_to_dict(r) for r in raw]
 
     # Fallback path — primary either errored or returned zero results.
     # Walk down a health-aware chain. Note: the chain runs on its own
@@ -1062,7 +1094,7 @@ async def find_competitor_ads(
                         "country": country,
                     })
                 for r in rs:
-                    rec = to_ad_record(r.__dict__).to_dict()
+                    rec = to_ad_record(result_to_dict(r)).to_dict()
                     ads.append(rec)
                 totals["meta"] = len(rs)
             except Exception as e:
@@ -1077,7 +1109,7 @@ async def find_competitor_ads(
                     "country": country,
                 })
                 for r in rs:
-                    rec = to_ad_record(r.__dict__).to_dict()
+                    rec = to_ad_record(result_to_dict(r)).to_dict()
                     ads.append(rec)
                 totals["instagram"] = len(rs)
             except Exception as e:
@@ -1094,7 +1126,7 @@ async def find_competitor_ads(
                     "region": country,
                 })
                 for r in rs:
-                    rec = to_ad_record(r.__dict__).to_dict()
+                    rec = to_ad_record(result_to_dict(r)).to_dict()
                     ads.append(rec)
                 totals["google"] = len(rs)
             except Exception as e:
@@ -1110,7 +1142,7 @@ async def find_competitor_ads(
                     "country": country,
                 })
                 for r in rs:
-                    rec = to_ad_record(r.__dict__).to_dict()
+                    rec = to_ad_record(result_to_dict(r)).to_dict()
                     ads.append(rec)
                 totals["tiktok"] = len(rs)
             except Exception as e:
@@ -1145,7 +1177,7 @@ async def list_engines() -> dict[str, Any]:
       "what engines does AgentSearch support" / "can you search <site>"
       "is X a supported source" / "list available engines"
 
-    Returns 88+ engines grouped by category (general, code, social,
+    Returns the live engine registry grouped by category (general, code, social,
     news, video, ads, dev_docs, app stores, ...). Always check this
     BEFORE telling the user a source isn't supported — the
     coverage is broader than most agents expect.
@@ -1647,7 +1679,9 @@ async def search_many(
                                      "error?"}},
           "merged":     [...],   # URL-deduped, sorted by consensus + score
           "elapsed_s":  float,
-          "successful": int      # how many engines returned >=1 result
+          "successful": int,     # how many engines returned >=1 result
+          "timed_out":  int,     # engines stopped at the hard deadline
+          "deadline_reached": bool
         }``
         Each merged result carries an extra ``engines`` list naming
         every source that surfaced the URL — a useful consensus signal
@@ -1659,6 +1693,7 @@ async def search_many(
         return {
             "query": query, "engines": [], "per_engine": {},
             "merged": [], "elapsed_s": 0.0, "successful": 0,
+            "timed_out": 0, "deadline_reached": False,
         }
 
     limit = max(1, min(limit, 50))
@@ -1682,6 +1717,7 @@ async def search_many(
             "query": query, "engines": list(engines),
             "per_engine": {}, "merged": [],
             "elapsed_s": 0.0, "successful": 0,
+            "timed_out": 0, "deadline_reached": False,
             "error": f"{type(e).__name__}: {e}",
         }
 
@@ -2176,6 +2212,8 @@ async def summarise_news(
           "merged":    [...],          # URL-deduped, sorted by consensus
           "per_source": {...},         # per-engine raw results
           "extracted_count": int,
+          "timed_out": int,
+          "deadline_reached": bool,
           "elapsed_s": float
         }``
         ``merged`` carries the same shape as ``search_many.merged`` —
@@ -2189,6 +2227,7 @@ async def summarise_news(
         return {
             "topic": topic, "sources": [], "merged": [],
             "per_source": {}, "extracted_count": 0, "elapsed_s": 0.0,
+            "timed_out": 0, "deadline_reached": False,
             "error": "topic must not be empty",
         }
     src_list = list(sources) if sources else [
@@ -2214,6 +2253,7 @@ async def summarise_news(
         return {
             "topic": topic, "sources": src_list,
             "merged": [], "per_source": {}, "extracted_count": 0,
+            "timed_out": 0, "deadline_reached": False,
             "elapsed_s": round(_time.time() - started, 1),
             "error": f"{type(e).__name__}: {e}",
         }
@@ -2262,6 +2302,8 @@ async def summarise_news(
         "per_source": sm.get("per_engine") or {},
         "extracted_count": extracted,
         "successful_engines": sm.get("successful", 0),
+        "timed_out": sm.get("timed_out", 0),
+        "deadline_reached": sm.get("deadline_reached", False),
         "elapsed_s": round(_time.time() - started, 1),
     }
 
@@ -2420,7 +2462,7 @@ async def ads_batch(
                     "country": country,
                 })
                 for r in rs:
-                    ads.append(to_ad_record(r.__dict__).to_dict())
+                    ads.append(to_ad_record(result_to_dict(r)).to_dict())
                 by_platform["meta"] = len(rs)
             except Exception as e:
                 errors["meta"] = f"{type(e).__name__}: {e}"
@@ -2433,7 +2475,7 @@ async def ads_batch(
                     "country": country,
                 })
                 for r in rs:
-                    ads.append(to_ad_record(r.__dict__).to_dict())
+                    ads.append(to_ad_record(result_to_dict(r)).to_dict())
                 by_platform["instagram"] = len(rs)
             except Exception as e:
                 errors["instagram"] = f"{type(e).__name__}: {e}"
@@ -2448,7 +2490,7 @@ async def ads_batch(
                     "region": country,
                 })
                 for r in rs:
-                    ads.append(to_ad_record(r.__dict__).to_dict())
+                    ads.append(to_ad_record(result_to_dict(r)).to_dict())
                 by_platform["google"] = len(rs)
             except Exception as e:
                 errors["google"] = f"{type(e).__name__}: {e}"
@@ -2462,7 +2504,7 @@ async def ads_batch(
                     "country": country,
                 })
                 for r in rs:
-                    ads.append(to_ad_record(r.__dict__).to_dict())
+                    ads.append(to_ad_record(result_to_dict(r)).to_dict())
                 by_platform["tiktok"] = len(rs)
             except Exception as e:
                 errors["tiktok"] = f"{type(e).__name__}: {e}"
@@ -2639,7 +2681,7 @@ async def image_search(
             "count": 0, "results": [],
         }
 
-    results = [r.to_dict() for r in raw]
+    results = [result_to_dict(r) for r in raw]
     return {
         "engine": engine,
         "query": query,
@@ -2683,115 +2725,34 @@ async def image_search_many(
           "per_engine":  {<engine>: {"ok", "count", "results", "elapsed_s"}},
           "merged":      [<unique image results across all engines>],
           "elapsed_s":   float,
-          "successful":  int
+          "successful":  int,
+          "timed_out":   int,
+          "deadline_reached": bool
         }``
     """
-    from concurrent.futures import ThreadPoolExecutor, as_completed
-    import time as _time
+    from .multi import search_images_many
 
     src_list = list(engines) if engines else list(_IMAGE_ENGINES_DEFAULT)
-    # De-dupe preserving order.
-    seen = set()
-    unique = []
-    for e in src_list:
-        if e not in seen:
-            unique.append(e); seen.add(e)
-    src_list = unique
-
-    limit = max(1, min(int(limit), 50))
-
-    def _one_engine(name: str) -> dict[str, Any]:
-        from .core import BrowserConfig, launch, new_page
-        started = _time.time()
-        try:
-            engine_cls = _get_engine(name)
-        except ValueError as e:
-            return {"engine": name, "ok": False, "error": str(e),
-                    "count": 0, "results": [],
-                    "elapsed_s": round(_time.time() - started, 2)}
-        if not _is_image_engine_class(engine_cls):
-            return {"engine": name, "ok": False,
-                    "error": "not an image engine",
-                    "count": 0, "results": [],
-                    "elapsed_s": round(_time.time() - started, 2)}
-        browser = None
-        try:
-            browser = launch(BrowserConfig(headless=HEADLESS, humanize=True))
-            page = new_page(browser)
-            inst = engine_cls(page)
-            raw = inst.search(query, limit=limit) or []
-            return {
-                "engine": name, "ok": True,
-                "count": len(raw),
-                "results": [r.to_dict() for r in raw],
-                "elapsed_s": round(_time.time() - started, 2),
-            }
-        except Exception as e:
-            log.warning("[mcp] image_search_many engine %s failed: %s", name, e)
-            return {"engine": name, "ok": False,
-                    "error": f"{type(e).__name__}: {e}",
-                    "count": 0, "results": [],
-                    "elapsed_s": round(_time.time() - started, 2)}
-        finally:
-            if browser is not None:
-                try: browser.close()
-                except Exception: pass
-
-    def _run() -> dict[str, Any]:
-        per_engine: dict[str, dict[str, Any]] = {}
-        workers = min(len(src_list), 6)
-        with ThreadPoolExecutor(max_workers=workers) as ex:
-            futures = {ex.submit(_one_engine, n): n for n in src_list}
-            for fut in as_completed(futures, timeout=timeout_s):
-                name = futures[fut]
-                try:
-                    per_engine[name] = fut.result(timeout=1)
-                except Exception as e:
-                    per_engine[name] = {
-                        "engine": name, "ok": False,
-                        "error": f"{type(e).__name__}: {e}",
-                        "count": 0, "results": [],
-                    }
-        # Make sure every requested engine has a row
-        for n in src_list:
-            per_engine.setdefault(n, {
-                "engine": n, "ok": False,
-                "error": "timeout / future never completed",
-                "count": 0, "results": [],
-            })
-        # Merge + de-dupe by image_url
-        merged: list[dict[str, Any]] = []
-        seen_urls: set[str] = set()
-        for n in src_list:
-            for r in per_engine[n].get("results", []):
-                u = r.get("image_url") or ""
-                if not u or u in seen_urls:
-                    continue
-                seen_urls.add(u)
-                merged.append(r)
-        return {
-            "query": query,
-            "engines": src_list,
-            "per_engine": per_engine,
-            "merged": merged,
-            "successful": sum(1 for v in per_engine.values()
-                              if v.get("ok") and v.get("count", 0) > 0),
-        }
-
-    started = _time.time()
     try:
-        out = await asyncio.to_thread(_run)
+        return await asyncio.to_thread(
+            search_images_many,
+            query,
+            src_list,
+            limit=limit,
+            headless=HEADLESS,
+            timeout_s=timeout_s,
+        )
     except Exception as e:
         log.exception("[mcp] image_search_many failed: %s", e)
         return {
             "query": query, "engines": src_list,
             "per_engine": {}, "merged": [],
             "successful": 0,
-            "elapsed_s": round(_time.time() - started, 2),
+            "timed_out": 0,
+            "deadline_reached": False,
+            "elapsed_s": 0.0,
             "error": f"{type(e).__name__}: {e}",
         }
-    out["elapsed_s"] = round(_time.time() - started, 2)
-    return out
 
 
 @mcp.tool()

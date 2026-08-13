@@ -13,6 +13,7 @@ from functools import lru_cache
 from typing import Optional
 
 from .core import launch, new_page, BrowserConfig
+from .results import result_to_dict
 
 # Explicit short-alias map. Maps `--engine` value → `(module, class)`.
 # Anything NOT in here is auto-discovered from agent_search/engines/.
@@ -318,7 +319,11 @@ def cmd_search(args):
                             pass
 
         if args.json:
-            print(json.dumps([r.__dict__ for r in results], ensure_ascii=False, indent=2))
+            print(json.dumps(
+                [result_to_dict(r) for r in results],
+                ensure_ascii=False,
+                indent=2,
+            ))
         else:
             for i, r in enumerate(results, 1):
                 print(f"{i}. {r.title}")
@@ -422,8 +427,8 @@ def cmd_list_engines(args):
 def cmd_ads_download(args):
     """Download every image / video URL from an ad-engine JSONL file.
 
-    Each line of the input must be a JSON object shaped like a
-    ``SearchResult.__dict__`` from one of the ad-library engines (i.e.
+    Each line of the input must be a serialized ``SearchResult`` from one of
+    the ad-library engines (i.e.
     what ``agentsearch search ... --json`` writes for the ``results``
     field, plus a few extra fields like ``ad_archive_id``,
     ``video_url``, etc.).
@@ -1164,7 +1169,7 @@ def _run_meta_like_query(engine_name: str, query: str, args, proxy_url) -> dict:
                              country=args.country or "US",
                              status="active")
         return {"ok": True,
-                "results": [r.__dict__ for r in (results or [])],
+                "results": [result_to_dict(r) for r in (results or [])],
                 "elapsed_s": round(_t.time() - started, 1)}
     except Exception as e:
         return {"ok": False, "error": f"{type(e).__name__}: {e}",
@@ -1196,7 +1201,7 @@ def _run_meta_advertiser(engine_name: str, page_id: str, args, proxy_url) -> dic
             status="active",
         )
         return {"ok": True,
-                "results": [r.__dict__ for r in (results or [])],
+                "results": [result_to_dict(r) for r in (results or [])],
                 "elapsed_s": round(_t.time() - started, 1)}
     except Exception as e:
         return {"ok": False, "error": f"{type(e).__name__}: {e}",
@@ -1221,7 +1226,7 @@ def _run_tiktok_query(query: str, args, proxy_url) -> dict:
                              mode="top_ads", period=7,
                              country_code=args.country or "US")
         return {"ok": True,
-                "results": [r.__dict__ for r in (results or [])],
+                "results": [result_to_dict(r) for r in (results or [])],
                 "elapsed_s": round(_t.time() - started, 1)}
     except Exception as e:
         return {"ok": False, "error": f"{type(e).__name__}: {e}",
@@ -1254,9 +1259,9 @@ def _run_google_domain(domain: str, args, proxy_url) -> dict:
         if not domain_results:
             return {"ok": True, "results": [],
                     "elapsed_s": round(_t.time() - started, 1)}
-        adv_id = domain_results[0].__dict__.get("advertiser_id") or ""
+        adv_id = result_to_dict(domain_results[0]).get("advertiser_id") or ""
         if not adv_id.startswith("AR"):
-            return {"ok": True, "results": [r.__dict__ for r in domain_results],
+            return {"ok": True, "results": [result_to_dict(r) for r in domain_results],
                     "elapsed_s": round(_t.time() - started, 1)}
 
         # Step 2: advertiser_id → list of creatives
@@ -1268,7 +1273,7 @@ def _run_google_domain(domain: str, args, proxy_url) -> dict:
             region=args.country if args.country and args.country != "US" else "anywhere",
         )
         return {"ok": True,
-                "results": [r.__dict__ for r in (creatives or [])],
+                "results": [result_to_dict(r) for r in (creatives or [])],
                 "elapsed_s": round(_t.time() - started, 1)}
     except Exception as e:
         return {"ok": False, "error": f"{type(e).__name__}: {e}",
@@ -1508,7 +1513,7 @@ def _run_meta_like(engine_name: str, args, proxy_url) -> dict:
         )
         return {
             "ok": True,
-            "results": [r.__dict__ for r in (results or [])],
+            "results": [result_to_dict(r) for r in (results or [])],
             "elapsed_s": round(_t.time() - started, 1),
         }
     except Exception as e:
@@ -1543,7 +1548,7 @@ def _run_tiktok(args, proxy_url) -> dict:
         )
         return {
             "ok": True,
-            "results": [r.__dict__ for r in (results or [])],
+            "results": [result_to_dict(r) for r in (results or [])],
             "elapsed_s": round(_t.time() - started, 1),
         }
     except Exception as e:
@@ -1593,7 +1598,7 @@ def _run_google(args, proxy_url) -> dict:
             )
         return {
             "ok": True,
-            "results": [r.__dict__ for r in (results or [])],
+            "results": [result_to_dict(r) for r in (results or [])],
             "elapsed_s": round(_t.time() - started, 1),
         }
     except Exception as e:
@@ -1841,6 +1846,7 @@ def cmd_search_many(args):
     print(
         f"query={args.query!r} engines={out['engines']} "
         f"successful={out['successful']}/{len(out['engines'])} "
+        f"timed_out={out['timed_out']} "
         f"elapsed={out['elapsed_s']}s"
     )
     print()
@@ -2141,7 +2147,13 @@ def main():
         sys.argv = [sys.argv[0]] + sys.argv[2:]
         sys.exit(canary_main())
 
-    parser = argparse.ArgumentParser(prog="agentsearch", description="AgentSearch — local stealth-browser web search across 71+ sites for AI agents")
+    parser = argparse.ArgumentParser(
+        prog="agentsearch",
+        description=(
+            "AgentSearch — local stealth-browser web search across "
+            "100+ sites for AI agents"
+        ),
+    )
     sub = parser.add_subparsers(dest="command")
 
     # search

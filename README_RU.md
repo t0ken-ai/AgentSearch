@@ -6,11 +6,11 @@
 
 # **Бесплатно · Локально · Приватно · Обходит Cloudflare**
 
-**Один Python-пакет. 90+ сайтов. Ноль API-ключей. Ноль утечек данных.**
+**Один Python-пакет. 100+ сайтов. Ноль API-ключей. Ноль утечек данных.**
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
-[![Python 3.9+](https://img.shields.io/badge/Python-3.9+-blue.svg)](https://www.python.org/)
-[![Sites: 90+](https://img.shields.io/badge/Sites-90%2B-success.svg)]()
+[![Python 3.12+](https://img.shields.io/badge/Python-3.12+-blue.svg)](https://www.python.org/)
+[![Sites: 100+](https://img.shields.io/badge/Sites-100%2B-success.svg)]()
 [![No API Key](https://img.shields.io/badge/API_ключ-не_нужен-success.svg)]()
 [![Local Only](https://img.shields.io/badge/Данные-только_у_вас-orange.svg)]()
 
@@ -25,7 +25,7 @@
 ```bash
 pip install cloakbrowser && pip install -e .
 
-# Поиск по любому из 90+ движков
+# Поиск по любому из 100+ движков
 agentsearch search "санкции 2026"            --engine yandex  --limit 5
 agentsearch search "курс рубля прогноз"      --engine mail_ru --limit 5
 agentsearch search "react hooks учебник"     --engine google  --limit 5
@@ -105,7 +105,7 @@ pip install cloakbrowser
 pip install -e .
 ```
 
-Требуется Python 3.9+. CloakBrowser (stealth Chromium) скачается автоматически при первом запуске.
+Требуется Python 3.12+. CloakBrowser (stealth Chromium) скачается автоматически при первом запуске.
 
 ---
 
@@ -125,7 +125,7 @@ pip install -e .
 }
 ```
 
-Доступные инструменты: `search`, `extract`, `extract_many`, `list_engines`, `list_dev_docs_platforms`, `search_app`, `lookup_app`, `find_competitor_ads`, `download_ad_media`.
+18 доступных инструментов: `search`, `extract`, `extract_many`, `list_engines`, `list_dev_docs_platforms`, `search_app`, `lookup_app`, `find_competitor_ads`, `download_ad_media`, `search_many`, `engine_status`, `screenshot`, `download_files`, `summarise_news`, `ads_batch`, `image_search`, `image_search_many`, `download_images`.
 
 ---
 
@@ -135,4 +135,4 @@ pip install -e .
 
 ---
 
-*Один Python-пакет · 90+ поисковых движков · 142 платформы документации · 5 рекламных библиотек · App Store · 9 MCP-инструментов — всё локально, без API-ключей.*
+*Один Python-пакет · 100+ поисковых движков · 142 платформы документации · 5 рекламных библиотек · App Store · 18 MCP-инструментов — всё локально, без API-ключей.*

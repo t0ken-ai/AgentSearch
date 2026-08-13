@@ -6,11 +6,11 @@
 
 # **Miễn phí · Cục bộ · Riêng tư · Vượt Cloudflare**
 
-**Một gói Python. 90+ trang web. Không API key. Không rò rỉ dữ liệu.**
+**Một gói Python. 100+ trang web. Không API key. Không rò rỉ dữ liệu.**
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
-[![Python 3.9+](https://img.shields.io/badge/Python-3.9+-blue.svg)](https://www.python.org/)
-[![Sites: 90+](https://img.shields.io/badge/Sites-90%2B-success.svg)]()
+[![Python 3.12+](https://img.shields.io/badge/Python-3.12+-blue.svg)](https://www.python.org/)
+[![Sites: 100+](https://img.shields.io/badge/Sites-100%2B-success.svg)]()
 [![No API Key](https://img.shields.io/badge/Không-API_Key-success.svg)]()
 [![Local Only](https://img.shields.io/badge/Dữ_liệu-Ở_máy_bạn-orange.svg)]()
 
@@ -25,7 +25,7 @@
 ```bash
 pip install cloakbrowser && pip install -e .
 
-# Tìm kiếm trên 90+ công cụ
+# Tìm kiếm trên 100+ công cụ
 agentsearch search "giá xăng hôm nay"        --engine coccoc --limit 5
 agentsearch search "VN-Index dự báo"          --engine coccoc --limit 5
 agentsearch search "react hooks hướng dẫn"    --engine google --limit 5
@@ -105,7 +105,7 @@ pip install cloakbrowser
 pip install -e .
 ```
 
-Yêu cầu Python 3.9+. Lần chạy đầu tiên CloakBrowser (Chromium ẩn danh) sẽ tự tải về.
+Yêu cầu Python 3.12+. Lần chạy đầu tiên CloakBrowser (Chromium ẩn danh) sẽ tự tải về.
 
 ---
 
@@ -125,7 +125,7 @@ Thêm vào `~/.kiro/settings/mcp.json` (hoặc tệp tương đương ở Cursor
 }
 ```
 
-Các công cụ được phơi ra: `search`, `extract`, `extract_many`, `list_engines`, `list_dev_docs_platforms`, `search_app`, `lookup_app`, `find_competitor_ads`, `download_ad_media`.
+18 công cụ được phơi ra: `search`, `extract`, `extract_many`, `list_engines`, `list_dev_docs_platforms`, `search_app`, `lookup_app`, `find_competitor_ads`, `download_ad_media`, `search_many`, `engine_status`, `screenshot`, `download_files`, `summarise_news`, `ads_batch`, `image_search`, `image_search_many`, `download_images`.
 
 ---
 
@@ -135,4 +135,4 @@ Mọi thứ **không** có ở đây (bảng tham chiếu đầy đủ về các
 
 ---
 
-*Một gói Python · 90+ công cụ tìm kiếm · 142 nền tảng tài liệu dev · 5 thư viện quảng cáo · App Store · 9 công cụ MCP — tất cả cục bộ, không cần API key.*
+*Một gói Python · 100+ công cụ tìm kiếm · 142 nền tảng tài liệu dev · 5 thư viện quảng cáo · App Store · 18 công cụ MCP — tất cả cục bộ, không cần API key.*

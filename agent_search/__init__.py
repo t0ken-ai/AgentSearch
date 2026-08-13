@@ -1,2 +1,7 @@
-"""AgentSearch - Anti-detection headless browser framework."""
-__version__ = "0.1.0"
+"""AgentSearch public package surface."""
+
+from .results import SearchResult, result_to_dict
+
+__version__ = "1.1.0"
+
+__all__ = ["SearchResult", "result_to_dict", "__version__"]

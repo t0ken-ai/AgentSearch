@@ -3,25 +3,12 @@
 import logging
 import time
 import random
-from dataclasses import dataclass
 
 from ..core import safe_goto, human_delay
+from ..results import SearchResult
 from ..stealth.enhance import apply_stealth, check_blocked
 
 log = logging.getLogger(__name__)
-
-
-@dataclass
-class SearchResult:
-    title: str
-    url: str
-    snippet: str = ""
-    score: int | None = None
-    # When the engine can extract / infer a publication date from the
-    # SERP item, store an ISO-8601 string ('2026-05-31' or
-    # '2026-05-31T12:34:56Z'). Empty when not available. Used by
-    # downstream consumers (and the agent) to sort by recency.
-    published_date: str = ""
 
 
 class BaseEngine:

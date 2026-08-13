@@ -6,27 +6,55 @@ A typical agent research turn needs hits from several complementary engines
 ``search`` command means launching N Chromiums and waiting end-to-end for
 each — a ~10-15s tax for three engines.
 
-This module runs the engines concurrently, each in its own thread with its
-own browser instance. Total wall-clock time becomes ``max(individual_time)``
-instead of ``sum(individual_time)``, plus optional URL-level deduplication
-so the agent sees a clean merged feed.
-
-Threading note: Playwright's *sync* API is not thread-safe within a single
-``Browser`` instance, so each worker launches its own browser. The startup
-cost is paid in parallel and amortised across the whole batch.
+This module runs engines concurrently in isolated worker processes. Each
+worker owns its browser, which preserves Playwright's thread affinity and
+lets the supervisor terminate a stuck browser at the requested deadline.
+Thread pools cannot provide that guarantee: Python cannot cancel a running
+thread, and ``ThreadPoolExecutor`` waits for its workers during shutdown.
 """
 
 from __future__ import annotations
 
 import logging
+import multiprocessing as mp
+import os
+import signal
+import sys
 import time
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from collections import deque
+from collections.abc import Callable
+from multiprocessing.connection import wait
 from typing import Any
 from urllib.parse import urlparse, urlunparse
 
 from .core import BrowserConfig, launch, new_page
+from .results import result_to_dict
 
 log = logging.getLogger(__name__)
+
+EngineRunner = Callable[[str, str, int, bool], dict[str, Any]]
+
+
+def _start_method_for_main(
+    main_file: str | None,
+    *,
+    interactive: bool = False,
+) -> str:
+    """Choose a safe multiprocessing bootstrap for the calling environment.
+
+    ``spawn`` is required for normal CLI/MCP execution because it never
+    inherits Playwright's greenlet state. Python cannot spawn from notebooks,
+    ``python -c``, or stdin, however: their synthetic ``<stdin>`` path cannot
+    be imported in the child. POSIX callers in that narrow interactive case
+    fall back to ``fork``; Windows has no equivalent and retains ``spawn`` so
+    it returns a clear worker-start error instead of selecting an unavailable
+    method.
+    """
+    if os.name == "posix" and (
+        interactive or not main_file or not os.path.isfile(main_file)
+    ):
+        return "fork"
+    return "spawn"
 
 
 def _run_one_engine(
@@ -64,7 +92,7 @@ def _run_one_engine(
             "engine": engine_name,
             "ok": True,
             "count": len(raw),
-            "results": [r.__dict__ for r in raw],
+            "results": [result_to_dict(r) for r in raw],
             "elapsed_s": round(time.time() - started, 2),
         }
     except Exception as e:  # noqa: BLE001 — we explicitly want the union of failures
@@ -83,6 +111,325 @@ def _run_one_engine(
                 browser.close()
             except Exception:
                 pass
+
+
+def _run_one_image_engine(
+    engine_name: str,
+    query: str,
+    limit: int,
+    headless: bool,
+) -> dict[str, Any]:
+    """Run one image adapter with the same worker contract as web search."""
+    from .cli import _get_engine  # noqa: WPS433
+
+    started = time.time()
+    try:
+        engine_cls = _get_engine(engine_name)
+    except ValueError as exc:
+        return {
+            "engine": engine_name,
+            "ok": False,
+            "error": str(exc),
+            "count": 0,
+            "results": [],
+            "elapsed_s": round(time.time() - started, 2),
+        }
+
+    if not getattr(engine_cls, "is_image_engine", False):
+        return {
+            "engine": engine_name,
+            "ok": False,
+            "error": "not an image engine",
+            "count": 0,
+            "results": [],
+            "elapsed_s": round(time.time() - started, 2),
+        }
+
+    browser = None
+    try:
+        browser = launch(BrowserConfig(headless=headless, humanize=True))
+        page = new_page(browser)
+        instance = engine_cls(page)
+        raw = instance.search(query, limit=limit) or []
+        return {
+            "engine": engine_name,
+            "ok": True,
+            "count": len(raw),
+            "results": [result_to_dict(result) for result in raw],
+            "elapsed_s": round(time.time() - started, 2),
+        }
+    except Exception as exc:  # adapters and browser transports fail alike
+        log.warning("[multi] image engine %s failed: %s", engine_name, exc)
+        return {
+            "engine": engine_name,
+            "ok": False,
+            "error": f"{type(exc).__name__}: {exc}",
+            "count": 0,
+            "results": [],
+            "elapsed_s": round(time.time() - started, 2),
+        }
+    finally:
+        if browser is not None:
+            try:
+                browser.close()
+            except Exception:
+                pass
+
+
+def _worker_process(
+    connection,
+    runner: EngineRunner,
+    engine_name: str,
+    query: str,
+    limit: int,
+    headless: bool,
+) -> None:
+    """Run one engine in an isolated process and send one result payload.
+
+    On POSIX the worker starts a new process group before launching Chromium.
+    The parent records whether that isolation succeeded, so a timeout can
+    terminate both Python and any browser descendants without risking the
+    parent's process group.
+    """
+    group_isolated = False
+    if os.name == "posix" and hasattr(os, "setsid"):
+        try:
+            os.setsid()
+            group_isolated = True
+        except OSError:
+            # Process-level termination remains available as a fallback.
+            pass
+
+    try:
+        connection.send(("ready", group_isolated))
+        try:
+            payload = runner(engine_name, query, limit, headless)
+        except BaseException as exc:  # child must always report a payload
+            payload = {
+                "engine": engine_name,
+                "ok": False,
+                "error": f"{type(exc).__name__}: {exc}",
+                "count": 0,
+                "results": [],
+                "elapsed_s": 0.0,
+            }
+        connection.send(("result", payload))
+    except (BrokenPipeError, EOFError, OSError):
+        # The parent may close the pipe while enforcing the deadline.
+        pass
+    finally:
+        connection.close()
+
+
+def _signal_worker(process, *, group_isolated: bool, force: bool) -> None:
+    """Signal one worker, including browser descendants when isolated."""
+    if not process.is_alive():
+        return
+
+    if group_isolated and os.name == "posix" and process.pid:
+        try:
+            os.killpg(process.pid, signal.SIGKILL if force else signal.SIGTERM)
+            return
+        except (ProcessLookupError, PermissionError, OSError):
+            pass
+    if force:
+        process.kill()
+    else:
+        process.terminate()
+
+
+def _terminate_workers(states: list[dict[str, Any]]) -> None:
+    """Stop workers in parallel under one bounded cleanup budget.
+
+    Signals are sent to every process before waiting. This matters at the hard
+    deadline: waiting two seconds per worker would turn an eight-engine fan-out
+    into sixteen seconds of unadvertised tail latency.
+    """
+    for state in states:
+        _signal_worker(
+            state["process"],
+            group_isolated=state["group_isolated"],
+            force=False,
+        )
+
+    graceful_deadline = time.monotonic() + 2.0
+    for state in states:
+        remaining = max(0.0, graceful_deadline - time.monotonic())
+        state["process"].join(timeout=remaining)
+
+    survivors = [state for state in states if state["process"].is_alive()]
+    for state in survivors:
+        _signal_worker(
+            state["process"],
+            group_isolated=state["group_isolated"],
+            force=True,
+        )
+
+    force_deadline = time.monotonic() + 1.0
+    for state in survivors:
+        remaining = max(0.0, force_deadline - time.monotonic())
+        state["process"].join(timeout=remaining)
+
+
+def _terminate_worker(process, *, group_isolated: bool) -> None:
+    """Stop one worker through the same bounded cleanup path."""
+    _terminate_workers([{
+        "process": process,
+        "group_isolated": group_isolated,
+    }])
+
+
+def _timeout_result(engine_name: str, timeout_s: float) -> dict[str, Any]:
+    """Return the stable per-engine shape used when the deadline wins."""
+    return {
+        "engine": engine_name,
+        "ok": False,
+        "error": f"timeout after {timeout_s:g}s",
+        "count": 0,
+        "results": [],
+        "elapsed_s": round(timeout_s, 2),
+        "timed_out": True,
+    }
+
+
+def _run_process_fanout(
+    engine_names: list[str],
+    query: str,
+    limit: int,
+    headless: bool,
+    timeout_s: float,
+    max_workers: int,
+    *,
+    runner: EngineRunner = _run_one_engine,
+) -> tuple[dict[str, dict[str, Any]], bool]:
+    """Supervise isolated engine workers until completion or deadline.
+
+    ``runner`` is injectable for offline tests; production passes one of the
+    module-level web/image runners. Normal file-backed entry points use
+    ``spawn`` so no Playwright/greenlet state is inherited. Interactive POSIX
+    callers use the documented ``fork`` fallback because Python cannot spawn
+    from a synthetic ``<stdin>`` or notebook path.
+    """
+    main_module = sys.modules.get("__main__")
+    main_file = getattr(main_module, "__file__", None)
+    interactive = hasattr(sys, "ps1") or "ipykernel" in sys.modules
+    context = mp.get_context(
+        _start_method_for_main(main_file, interactive=interactive)
+    )
+    pending = deque(engine_names)
+    active: dict[str, dict[str, Any]] = {}
+    per_engine: dict[str, dict[str, Any]] = {}
+    deadline = time.monotonic() + max(0.0, timeout_s)
+
+    def start_available() -> None:
+        while pending and len(active) < max_workers and time.monotonic() < deadline:
+            name = pending.popleft()
+            recv_conn, send_conn = context.Pipe(duplex=False)
+            process = context.Process(
+                target=_worker_process,
+                args=(send_conn, runner, name, query, limit, headless),
+                name=f"agentsearch-{name}",
+            )
+            try:
+                process.start()
+            except Exception as exc:
+                recv_conn.close()
+                send_conn.close()
+                per_engine[name] = {
+                    "engine": name,
+                    "ok": False,
+                    "error": f"worker start failed: {type(exc).__name__}: {exc}",
+                    "count": 0,
+                    "results": [],
+                    "elapsed_s": 0.0,
+                }
+                continue
+            send_conn.close()
+            active[name] = {
+                "process": process,
+                "connection": recv_conn,
+                "group_isolated": False,
+            }
+
+    start_available()
+    while active or pending:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            break
+
+        start_available()
+        connections = [state["connection"] for state in active.values()]
+        if not connections:
+            continue
+
+        # Poll periodically so a child that exits before sending a payload is
+        # reported promptly instead of consuming the entire query deadline.
+        ready_connections = wait(connections, timeout=min(remaining, 0.1))
+        for connection in ready_connections:
+            name = next(
+                key for key, state in active.items()
+                if state["connection"] is connection
+            )
+            state = active[name]
+            try:
+                message_type, payload = connection.recv()
+            except (EOFError, OSError):
+                message_type, payload = "closed", None
+
+            if message_type == "ready":
+                state["group_isolated"] = bool(payload)
+                continue
+            if message_type == "result":
+                per_engine[name] = payload
+            else:
+                per_engine[name] = {
+                    "engine": name,
+                    "ok": False,
+                    "error": "worker exited without a result",
+                    "count": 0,
+                    "results": [],
+                    "elapsed_s": 0.0,
+                }
+
+            connection.close()
+            process = state["process"]
+            process.join(timeout=1.0)
+            if process.is_alive():
+                _terminate_worker(
+                    process, group_isolated=state["group_isolated"]
+                )
+            del active[name]
+
+        # Detect crashes whose pipe never produced a readable payload.
+        for name, state in list(active.items()):
+            process = state["process"]
+            connection = state["connection"]
+            if process.is_alive() or connection.poll():
+                continue
+            process.join(timeout=0.2)
+            connection.close()
+            per_engine[name] = {
+                "engine": name,
+                "ok": False,
+                "error": f"worker exited with code {process.exitcode}",
+                "count": 0,
+                "results": [],
+                "elapsed_s": 0.0,
+            }
+            del active[name]
+
+    deadline_reached = bool(active or pending)
+    if deadline_reached:
+        _terminate_workers(list(active.values()))
+        for name, state in list(active.items()):
+            state["connection"].close()
+            per_engine[name] = _timeout_result(name, timeout_s)
+        for name in pending:
+            per_engine[name] = _timeout_result(name, timeout_s)
+
+    # Preserve request order regardless of worker completion order.
+    ordered = {name: per_engine[name] for name in engine_names}
+    return ordered, deadline_reached
 
 
 def _normalize_url(u: str) -> str:
@@ -158,7 +505,7 @@ def search_many(
     *,
     limit: int = 5,
     headless: bool = True,
-    timeout_s: int = 90,
+    timeout_s: float = 90,
     max_workers: int | None = None,
 ) -> dict[str, Any]:
     """Run ``engines`` in parallel and return their combined output.
@@ -170,6 +517,7 @@ def search_many(
       * ``merged``:       URL-deduped list (see :func:`merge_results`)
       * ``elapsed_s``:    total wall-clock time for the whole fan-out
       * ``successful``:   how many engines returned at least one result
+      * ``timed_out``:    how many engines exceeded the hard deadline
     """
     if not engines:
         return {
@@ -179,6 +527,8 @@ def search_many(
             "merged": [],
             "elapsed_s": 0.0,
             "successful": 0,
+            "timed_out": 0,
+            "deadline_reached": False,
         }
 
     # De-duplicate engine names while preserving order (so a user passing
@@ -192,34 +542,17 @@ def search_many(
     engines = unique
 
     workers = max_workers or min(len(engines), 8)
+    workers = max(1, min(int(workers), len(engines)))
+    timeout_s = max(0.0, float(timeout_s))
     started = time.time()
-
-    per_engine: dict[str, dict[str, Any]] = {}
-    with ThreadPoolExecutor(max_workers=workers) as ex:
-        futures = {
-            ex.submit(_run_one_engine, name, query, limit, headless): name
-            for name in engines
-        }
-        for fut in as_completed(futures, timeout=timeout_s):
-            name = futures[fut]
-            try:
-                per_engine[name] = fut.result(timeout=1)
-            except Exception as e:
-                per_engine[name] = {
-                    "engine": name,
-                    "ok": False,
-                    "error": f"{type(e).__name__}: {e}",
-                    "count": 0,
-                    "results": [],
-                }
-
-    # Make sure every requested engine is represented even if its future
-    # didn't complete (timeout / cancellation).
-    for name in engines:
-        per_engine.setdefault(
-            name,
-            {"engine": name, "ok": False, "error": "timeout", "count": 0, "results": []},
-        )
+    per_engine, deadline_reached = _run_process_fanout(
+        engines,
+        query,
+        limit,
+        headless,
+        timeout_s,
+        workers,
+    )
 
     merged = merge_results(per_engine)
 
@@ -230,4 +563,79 @@ def search_many(
         "merged": merged,
         "elapsed_s": round(time.time() - started, 2),
         "successful": sum(1 for v in per_engine.values() if v.get("ok") and v.get("count")),
+        "timed_out": sum(1 for v in per_engine.values() if v.get("timed_out")),
+        "deadline_reached": deadline_reached,
+    }
+
+
+def search_images_many(
+    query: str,
+    engines: list[str],
+    *,
+    limit: int = 10,
+    headless: bool = True,
+    timeout_s: float = 90,
+    max_workers: int | None = None,
+) -> dict[str, Any]:
+    """Run image adapters behind the same enforceable fan-out deadline.
+
+    Image adapters launch Chromium just like ordinary search adapters, so a
+    thread-pool timeout has the same cancellation problem. Keeping this path
+    on the shared process supervisor ensures MCP callers are not held open by
+    a browser that hangs after the advertised deadline.
+    """
+    if not engines:
+        return {
+            "query": query,
+            "engines": [],
+            "per_engine": {},
+            "merged": [],
+            "elapsed_s": 0.0,
+            "successful": 0,
+            "timed_out": 0,
+            "deadline_reached": False,
+        }
+
+    unique = list(dict.fromkeys(engines))
+    workers = max_workers or min(len(unique), 6)
+    workers = max(1, min(int(workers), len(unique)))
+    timeout_s = max(0.0, float(timeout_s))
+    started = time.time()
+    per_engine, deadline_reached = _run_process_fanout(
+        unique,
+        query,
+        max(1, min(int(limit), 50)),
+        headless,
+        timeout_s,
+        workers,
+        runner=_run_one_image_engine,
+    )
+
+    # Image URLs are often signed or contain meaningful resize parameters;
+    # unlike result-page URLs, normalizing their query string can change the
+    # asset. Exact URL equality is therefore the safe de-duplication key.
+    merged: list[dict[str, Any]] = []
+    seen_urls: set[str] = set()
+    for engine_name in unique:
+        for result in per_engine[engine_name].get("results", []):
+            image_url = result.get("image_url") or ""
+            if not image_url or image_url in seen_urls:
+                continue
+            seen_urls.add(image_url)
+            merged.append(result)
+
+    return {
+        "query": query,
+        "engines": unique,
+        "per_engine": per_engine,
+        "merged": merged,
+        "elapsed_s": round(time.time() - started, 2),
+        "successful": sum(
+            1 for value in per_engine.values()
+            if value.get("ok") and value.get("count")
+        ),
+        "timed_out": sum(
+            1 for value in per_engine.values() if value.get("timed_out")
+        ),
+        "deadline_reached": deadline_reached,
     }

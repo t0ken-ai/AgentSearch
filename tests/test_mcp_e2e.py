@@ -1,4 +1,4 @@
-"""Step 2: end-to-end MCP-protocol test of all 15 tools.
+"""End-to-end MCP-protocol test of all 18 public tools.
 
 Spawns the registered MCP server, does a handshake, then calls every
 tool with cheap arguments and verifies each one returns a sensible
@@ -9,17 +9,22 @@ This is the test that proves the MCP install actually works for the
 agent — same code path Kiro will hit when invoking these tools.
 
 Run:
-    /Users/gao/tools/cloakbrowser/venv/bin/python tests/test_mcp_e2e.py
+    python tests/test_mcp_e2e.py
 """
 from __future__ import annotations
 
 import base64
 import json
 import os
+import selectors
 import subprocess
 import sys
 import tempfile
 import time
+from pathlib import Path
+
+
+REPO_ROOT = Path(__file__).resolve().parents[1]
 
 
 def _send(proc, msg):
@@ -28,17 +33,30 @@ def _send(proc, msg):
 
 
 def _recv(proc, want_id, timeout_s=120.0):
-    deadline = time.time() + timeout_s
-    while time.time() < deadline:
-        line = proc.stdout.readline()
-        if not line:
-            continue
-        try:
-            obj = json.loads(line.decode())
-        except Exception:
-            continue
-        if obj.get("id") == want_id:
-            return obj
+    deadline = time.monotonic() + timeout_s
+    selector = selectors.DefaultSelector()
+    selector.register(proc.stdout, selectors.EVENT_READ)
+    try:
+        while time.monotonic() < deadline:
+            remaining = deadline - time.monotonic()
+            if not selector.select(timeout=max(0.0, remaining)):
+                break
+            line = proc.stdout.readline()
+            if not line:
+                if proc.poll() is not None:
+                    raise RuntimeError(
+                        f"MCP server exited with code {proc.returncode} "
+                        f"while waiting for id={want_id}"
+                    )
+                continue
+            try:
+                obj = json.loads(line.decode())
+            except Exception:
+                continue
+            if obj.get("id") == want_id:
+                return obj
+    finally:
+        selector.close()
     raise TimeoutError(f"no response for id={want_id} in {timeout_s}s")
 
 
@@ -242,6 +260,41 @@ def check_download_ad_media(proc):
             f"empty input handled: total={rec.get('total')}")
 
 
+def check_image_search(proc):
+    rec, t, err = call_tool(
+        proc, 26, "image_search",
+        {"query": "python logo", "engine": "bing_images", "limit": 2},
+        timeout_s=90,
+    )
+    if err: return ("image_search", False, f"error: {err}")
+    return ("image_search", rec.get("count", 0) >= 1,
+            f"{rec.get('count', 0)} images in {t:.1f}s")
+
+
+def check_image_search_many(proc):
+    rec, t, err = call_tool(
+        proc, 27, "image_search_many",
+        {"query": "python logo", "engines": ["bing_images"], "limit": 2},
+        timeout_s=90,
+    )
+    if err: return ("image_search_many", False, f"error: {err}")
+    return ("image_search_many", rec.get("successful", 0) >= 1,
+            f"successful={rec.get('successful')} "
+            f"timed_out={rec.get('timed_out')} in {t:.1f}s")
+
+
+def check_download_images(proc):
+    with tempfile.TemporaryDirectory() as td:
+        rec, t, err = call_tool(
+            proc, 28, "download_images",
+            {"images": [], "output_dir": td},
+        )
+    if err: return ("download_images", False, f"error: {err}")
+    ok = rec.get("total") == 0 and rec.get("succeeded") == 0
+    return ("download_images", ok,
+            f"empty input handled: total={rec.get('total')}")
+
+
 CHECKS = [
     check_search,
     check_search_many,
@@ -259,17 +312,19 @@ CHECKS = [
     check_summarise_news,
     check_ads_batch,
     check_download_ad_media,
+    check_image_search,
+    check_image_search_many,
+    check_download_images,
 ]
 
 
 def main():
-    cmd = ["/Users/gao/tools/cloakbrowser/venv/bin/python",
-           "-m", "agent_search.mcp_server"]
+    cmd = [sys.executable, "-m", "agent_search.mcp_server"]
     env = {**os.environ, "AGENTSEARCH_HEADLESS": "1", "AGENTSEARCH_LOG": "WARNING"}
     print(f"spawning: {' '.join(cmd)}\n")
     proc = subprocess.Popen(
         cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE, env=env,
+        stderr=subprocess.PIPE, env=env, cwd=REPO_ROOT,
     )
 
     started_total = time.time()

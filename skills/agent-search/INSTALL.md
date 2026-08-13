@@ -23,7 +23,7 @@ mkdir -p ~/.kiro/agents
 cat > ~/.kiro/agents/kiro_search.json <<EOF
 {
   "name": "kiro_search",
-  "description": "Default agent + AgentSearch skill — 71 sites via stealth Chromium",
+  "description": "Default agent + AgentSearch skill — 100+ sites via stealth Chromium",
   "prompt": null,
   "tools": [
     "read", "write", "shell", "aws", "report", "introspect",
@@ -80,9 +80,9 @@ follows one of the recipes there. Example user prompts that should fire:
 ## Verifying the install
 
 ```bash
-source ~/tools/cloakbrowser/venv/bin/activate
-cd ~/projects/AgentSearch
-agentsearch list-engines  # expects 71+ entries
+cd /path/to/AgentSearch
+python -m pip install -e ".[mcp]"
+agentsearch list-engines  # expects 100+ unique engines
 agentsearch search "transformer scaling laws" \
     --engine arxiv --limit 3 --json | head -30
 ```

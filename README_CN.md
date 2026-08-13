@@ -6,11 +6,11 @@
 
 # **免费 · 本地 · 隐私 · 绕过 Cloudflare**
 
-**一个 Python 包。80+ 个网站。零 API Key。零数据外泄。**
+**一个 Python 包。100+ 个网站。零 API Key。零数据外泄。**
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
-[![Python 3.9+](https://img.shields.io/badge/Python-3.9+-blue.svg)](https://www.python.org/)
-[![Sites: 80](https://img.shields.io/badge/网站数-80-success.svg)]()
+[![Python 3.12+](https://img.shields.io/badge/Python-3.12+-blue.svg)](https://www.python.org/)
+[![Sites: 100+](https://img.shields.io/badge/网站数-100%2B-success.svg)]()
 [![No API Key](https://img.shields.io/badge/无需-API%20Key-success.svg)]()
 [![Local Only](https://img.shields.io/badge/数据-永远在本机-orange.svg)]()
 [![Bypasses Cloudflare](https://img.shields.io/badge/绕过-Cloudflare%20%2F%20PerimeterX%20%2F%20Akamai-red.svg)]()
@@ -29,7 +29,7 @@
 ```bash
 pip install cloakbrowser && pip install -e .
 
-# 任意 80+ 个站点搜索
+# 任意 100+ 个站点搜索
 agentsearch search "人工智能新闻"     --engine google --json
 agentsearch search "Python 教程"      --engine bilibili --limit 10
 agentsearch search "推荐笔记本 2025"  --engine reddit
@@ -62,7 +62,7 @@ python -m agent_search.mcp_server
 python -m agent_search.serve --port 8088
 ```
 
-80+ 个站点 · CLI · MCP server · HTTP API · 完全跑在你的机器上。**绕过 Cloudflare、PerimeterX、Akamai、DataDome 以及所有已知的指纹检测系统。**
+100+ 个站点 · CLI · MCP server · HTTP API · 完全跑在你的机器上。**绕过 Cloudflare、PerimeterX、Akamai、DataDome 以及所有已知的指纹检测系统。**
 
 ---
 
@@ -101,7 +101,7 @@ python -m agent_search.serve --port 8088
 | 🌐 数据是否离开本机                       | **永远不会** | 每次请求都发到云 | 不会 | 取决于实例 |
 | 🛡️ **能绕过 Cloudflare**                  | ✅ **C++ 级补丁** | 不适用（API 调用） | ❌ 秒被识别 | ❌ 仅 HTTP |
 | 🔬 **能通过指纹检测**                       | ✅ 全部主流 | 不适用 | ❌ CreepJS 直接挂 | ❌ |
-| 🌍 支持网站数                             | **80+ 个** | 1 个（Google） | 你自己写 | 聚合大概 10 个 SE |
+| 🌍 支持网站数                             | **100+ 个** | 1 个（Google） | 你自己写 | 聚合大概 10 个 SE |
 | 🐍 JavaScript 渲染                        | ✅ 完整 Chromium | ❌ 仅 API | ✅ | ❌ 仅 HTTP |
 | 🔐 需登录的网站                           | ✅ Cookie 导入 | ❌ | 有限 | ❌ |
 | 🚀 部署                                   | `pip install` | 注册 + 申请 key | 从零写代码 | Docker + 配置 |
@@ -109,7 +109,7 @@ python -m agent_search.serve --port 8088
 
 ---
 
-## 🌍 全部 80+ 个站点 — 按类目
+## 🌍 全部 100+ 个站点 — 按类目
 
 > 每个站点都是一个独立的适配器（`agent_search/engines/<name>.py`），并附带可独立运行的测试（`tests/test_<name>.py`）。
 
@@ -246,13 +246,13 @@ finally:
 cp -r skills/agent-search ~/.openclaw/workspace/skills/
 ```
 
-完成后你的 OpenClaw / Codex / Kiro Agent 就**原生知道**怎么搜 80+ 个站点了 — 不用写胶水代码、不用调 prompt。
+完成后你的 OpenClaw / Codex / Kiro Agent 就**原生知道**怎么搜 100+ 个站点了 — 不用写胶水代码、不用调 prompt。
 
 ---
 
 ## 🔌 作为 MCP Server 使用（Cursor / Cline / Claude Desktop / Continue / Roo Code）
 
-AgentSearch 自带 **Model Context Protocol** 服务器，任何兼容 MCP 的客户端开箱即得 `search` / `extract` / `list_engines` 三个工具 — 不用写胶水代码、不用 API Key。
+AgentSearch 自带 **Model Context Protocol** 服务器，任何兼容 MCP 的客户端开箱即得全部 **18 个工具** — 不用写胶水代码、不用 API Key。
 
 ### 安装
 
@@ -310,11 +310,16 @@ OpenClaw 会自动加载这个 skill，agent 在需要新鲜网络数据时会�
 
 ### Agent 拿到的工具
 
-| 工具 | 作用 | 何时调用 |
+| 工具组 | 作用 | 何时调用 |
 |---|---|---|
-| `search(query, engine, limit)` | 跑 80+ 个搜索引擎之一 | 任何需要新鲜网络结果时 |
-| `extract(url, paginate, max_scrolls)` | 抓 URL，返回 Markdown + 元数据 | 在 `search` 返回后想读全文时 |
-| `list_engines()` | 列出所有引擎 + 类目 | 不知道该用哪个引擎时 |
+| `search(query, engine, limit)` | 跑 100+ 个搜索引擎之一 | 任何需要新鲜网络结果时 |
+| `search_many` / `summarise_news` | 带硬截止时间的多来源并行搜索 | 调研、交叉验证与新闻监控 |
+| `image_search` / `image_search_many` | 搜索专用图片引擎 | 查找可下载图片及来源页面 |
+| `extract` / `extract_many` / `screenshot` | 阅读或截图已渲染页面 | 搜索后深挖，或已有 URL 时 |
+| `list_engines` / `list_dev_docs_platforms` / `engine_status` | 发现实时能力与健康状态 | 判断来源是否可用之前 |
+| `search_app` / `lookup_app` | 搜索并查看移动应用元数据 | App Store 与 Google Play 调研 |
+| `find_competitor_ads` / `ads_batch` | 跨平台收集竞品广告 | 创意与广告主调研 |
+| `download_files` / `download_images` / `download_ad_media` | 下载已发现的素材 | 报告、图片和广告创意归档 |
 
 服务器会在多次调用之间复用同一个 Chromium，每 25 次调用回收一次（可通过 `AGENTSEARCH_RECYCLE_AFTER` 调整），所以除了第一次调用外，后续调用的开销 <100ms，而不是完整的 ~1.5s 启动。
 
@@ -374,7 +379,7 @@ Canary 做的事：
 - 当 `(EMPTY + FAIL) / total > 20%` 时，通过 `gh` CLI 自动开（或追加评论到）一个打了 `canary-regression` 标签的 GitHub issue
 
 ```bash
-# 全量扫描（约 5 分钟，80+ 个引擎，并发 4）
+# 全量扫描（约 5 分钟，100+ 个引擎，并发 4）
 agentsearch canary
 
 # 只扫指定子集

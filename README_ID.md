@@ -6,11 +6,11 @@
 
 # **Gratis · Lokal · Privat · Menembus Cloudflare**
 
-**Satu paket Python. 90+ situs. Tanpa API key. Tanpa kebocoran data.**
+**Satu paket Python. 100+ situs. Tanpa API key. Tanpa kebocoran data.**
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
-[![Python 3.9+](https://img.shields.io/badge/Python-3.9+-blue.svg)](https://www.python.org/)
-[![Sites: 90+](https://img.shields.io/badge/Sites-90%2B-success.svg)]()
+[![Python 3.12+](https://img.shields.io/badge/Python-3.12+-blue.svg)](https://www.python.org/)
+[![Sites: 100+](https://img.shields.io/badge/Sites-100%2B-success.svg)]()
 [![No API Key](https://img.shields.io/badge/Tanpa-API_Key-success.svg)]()
 [![Local Only](https://img.shields.io/badge/Data-Tetap_di_komputermu-orange.svg)]()
 
@@ -25,7 +25,7 @@
 ```bash
 pip install cloakbrowser && pip install -e .
 
-# Cari di salah satu dari 90+ engine
+# Cari di salah satu dari 100+ engine
 agentsearch search "banjir Jakarta"           --engine detik  --limit 5
 agentsearch search "harga BBM Pertamina"      --engine kompas --limit 5
 agentsearch search "react hooks tutorial"     --engine google --limit 5
@@ -107,7 +107,7 @@ pip install cloakbrowser
 pip install -e .
 ```
 
-Butuh Python 3.9+. Saat dijalankan pertama kali, CloakBrowser (Chromium stealth) akan terunduh otomatis.
+Butuh Python 3.12+. Saat dijalankan pertama kali, CloakBrowser (Chromium stealth) akan terunduh otomatis.
 
 ---
 
@@ -127,7 +127,7 @@ Tambahkan ke `~/.kiro/settings/mcp.json` (atau berkas setara di Cursor / Claude 
 }
 ```
 
-Tools yang dibuka: `search`, `extract`, `extract_many`, `list_engines`, `list_dev_docs_platforms`, `search_app`, `lookup_app`, `find_competitor_ads`, `download_ad_media`.
+18 tools yang dibuka: `search`, `extract`, `extract_many`, `list_engines`, `list_dev_docs_platforms`, `search_app`, `lookup_app`, `find_competitor_ads`, `download_ad_media`, `search_many`, `engine_status`, `screenshot`, `download_files`, `summarise_news`, `ads_batch`, `image_search`, `image_search_many`, `download_images`.
 
 ---
 
@@ -137,4 +137,4 @@ Semua yang **tidak** ada di sini (referensi penuh setiap engine, opsi filter, pu
 
 ---
 
-*Satu paket Python · 90+ mesin pencari · 142 platform dokumentasi developer · 5 pustaka iklan · App Store · 9 tools MCP — semuanya lokal, tanpa API key.*
+*Satu paket Python · 100+ mesin pencari · 142 platform dokumentasi developer · 5 pustaka iklan · App Store · 18 tools MCP — semuanya lokal, tanpa API key.*

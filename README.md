@@ -6,11 +6,11 @@
 
 # **Free. Local. Private. Bypasses Cloudflare.**
 
-**One Python package. 80 websites. Zero API keys. Zero data leakage.**
+**One Python package. 100+ websites. Zero API keys. Zero data leakage.**
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
-[![Python 3.9+](https://img.shields.io/badge/Python-3.9+-blue.svg)](https://www.python.org/)
-[![Sites: 80](https://img.shields.io/badge/Sites-80-success.svg)]()
+[![Python 3.12+](https://img.shields.io/badge/Python-3.12+-blue.svg)](https://www.python.org/)
+[![Sites: 100+](https://img.shields.io/badge/Sites-100%2B-success.svg)]()
 [![No API Key](https://img.shields.io/badge/No%20API%20Key-Required-success.svg)]()
 [![Local Only](https://img.shields.io/badge/Data-Stays%20on%20Your%20Machine-orange.svg)]()
 [![Bypasses Cloudflare](https://img.shields.io/badge/Bypasses-Cloudflare%20%2F%20PerimeterX%20%2F%20Akamai-red.svg)]()
@@ -29,7 +29,7 @@
 ```bash
 pip install cloakbrowser && pip install -e .
 
-# Search any of 80+ sites
+# Search any of 100+ sites
 agentsearch search "what's new in transformers" --engine google --json
 agentsearch search "react hooks tutorial"     --engine youtube --limit 10
 agentsearch search "best laptop 2025"         --engine reddit
@@ -62,7 +62,7 @@ python -m agent_search.mcp_server
 python -m agent_search.serve --port 8088
 ```
 
-80 stealth sites · CLI · MCP server · HTTP API · runs entirely on your machine. **Bypasses Cloudflare, PerimeterX, Akamai, DataDome, and every fingerprint test we know of.**
+100+ stealth sites · CLI · MCP server · HTTP API · runs entirely on your machine. **Bypasses Cloudflare, PerimeterX, Akamai, DataDome, and every fingerprint test we know of.**
 
 ---
 
@@ -103,7 +103,7 @@ The web search landscape for AI agents in 2026 is unpleasant. Hosted APIs are ge
 | 🚦 **Rate limit**                        | **None** | 1k/mo free → paid | 500/mo free → paid | 1k/mo free → paid | 2k/mo @ 1 TPS | None (DDG-side) | None | None |
 | ⚖️ **TOS allows AI use**                 | ✅ Yes | ✅ | ✅ | ✅ | ❌ **Forbidden** | ✅ | ✅ | ✅ |
 | 🔌 **MCP server included**               | ✅ Yes | ⚠️ Third-party | ✅ Official | ✅ Official | ⚠️ Third-party | ✅ | ❌ | ❌ |
-| 🌍 **Sites supported**                   | **80** | 1 (web index) | 1 (web index) | 1 (neural index) | 1 (web index) | 1 | ~10 SE aggregator | DIY |
+| 🌍 **Sites supported**                   | **100+** | 1 (web index) | 1 (web index) | 1 (neural index) | 1 (web index) | 1 | ~10 SE aggregator | DIY |
 | 🛡️ **Bypasses Cloudflare**               | ✅ **C++ patches** | N/A (uses APIs) | N/A | N/A | N/A | ❌ | ❌ HTTP-only | ❌ Detected instantly |
 | 🐍 **JS rendering**                      | ✅ Full Chromium | ❌ API-only | ✅ | ❌ | ❌ | ❌ | ❌ | ✅ |
 | 🌐 **Data leaves your machine**          | **Never** | Always | Always | Always | Always | Always | Depends | Never |
@@ -113,7 +113,7 @@ The web search landscape for AI agents in 2026 is unpleasant. Hosted APIs are ge
 
 ---
 
-## 🌍 The 80 Sites — Categorized
+## 🌍 100+ Sites — Categorized
 
 > Every site is implemented as a self-contained adapter (`agent_search/engines/<name>.py`) with a runnable test (`tests/test_<name>.py`).
 
@@ -256,13 +256,13 @@ finally:
 cp -r skills/agent-search ~/.openclaw/workspace/skills/
 ```
 
-Now your OpenClaw / Codex / Kiro agent natively knows how to search 80+ sites — no plumbing, no prompts.
+Now your OpenClaw / Codex / Kiro agent natively knows how to search 100+ sites — no plumbing, no prompts.
 
 ---
 
 ## 🔌 Use as an MCP Server (Cursor / Cline / Claude Desktop / Continue / Roo Code)
 
-AgentSearch ships with a **Model Context Protocol** server, so any MCP-compatible client gets `search` / `extract` / `list_engines` tools out of the box — no glue code, no API keys.
+AgentSearch ships with a **Model Context Protocol** server, so any MCP-compatible client gets all **18 tools** out of the box — no glue code, no API keys.
 
 ### Install
 
@@ -320,11 +320,16 @@ OpenClaw will auto-load the skill and the agent will reach for AgentSearch whene
 
 ### What your agent gets
 
-| Tool | What it does | When to call |
+| Tools | What they do | When to call |
 |---|---|---|
-| ``search(query, engine, limit)`` | Run one of 80 search engines | Any time you need fresh web hits |
-| ``extract(url, paginate, max_scrolls)`` | Fetch a URL, return Markdown + metadata | After ``search`` returns a hit you want to read |
-| ``list_engines()`` | Enumerate engines + categories | When you're not sure which engine to use |
+| ``search(query, engine, limit)`` | Run one of 100+ search engines | Any time you need fresh web hits |
+| ``search_many`` / ``summarise_news`` | Parallel cross-source search with a hard deadline | Research, comparison, and news monitoring |
+| ``image_search`` / ``image_search_many`` | Search dedicated image engines | Find inspectable image assets and source pages |
+| ``extract`` / ``extract_many`` / ``screenshot`` | Read or capture rendered pages | After search, or when a URL is already known |
+| ``list_engines`` / ``list_dev_docs_platforms`` / ``engine_status`` | Discover live capabilities and health | Before claiming a source is unavailable |
+| ``search_app`` / ``lookup_app`` | Search and inspect mobile apps | App Store and Google Play research |
+| ``find_competitor_ads`` / ``ads_batch`` | Collect cross-platform competitor ads | Creative and advertiser research |
+| ``download_files`` / ``download_images`` / ``download_ad_media`` | Materialize discovered assets | Reports, images, and ad-creative collections |
 
 The server keeps a single Chromium alive across calls and recycles it every 25 calls (configurable via ``AGENTSEARCH_RECYCLE_AFTER``), so each tool call after the first costs <100ms of overhead instead of the full ~1.5s startup.
 
@@ -384,7 +389,7 @@ The canary:
 - When `(EMPTY + FAIL) / total > 20%`, opens (or comments on) a GitHub issue tagged `canary-regression` via the `gh` CLI
 
 ```bash
-# Full sweep (~5 min, 80+ engines, parallel=4)
+# Full sweep (~5 min, 100+ engines, parallel=4)
 agentsearch canary
 
 # Targeted subset

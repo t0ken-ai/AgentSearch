@@ -6,11 +6,11 @@
 
 # **Zdarma · Lokálně · Soukromě · Obejde Cloudflare**
 
-**Jeden Python balíček. 90+ webů. Žádné API klíče. Žádný únik dat.**
+**Jeden Python balíček. 100+ webů. Žádné API klíče. Žádný únik dat.**
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
-[![Python 3.9+](https://img.shields.io/badge/Python-3.9+-blue.svg)](https://www.python.org/)
-[![Sites: 90+](https://img.shields.io/badge/Sites-90%2B-success.svg)]()
+[![Python 3.12+](https://img.shields.io/badge/Python-3.12+-blue.svg)](https://www.python.org/)
+[![Sites: 100+](https://img.shields.io/badge/Sites-100%2B-success.svg)]()
 [![No API Key](https://img.shields.io/badge/Bez-API_kl%C3%AD%C4%8De-success.svg)]()
 [![Local Only](https://img.shields.io/badge/Data-Z%C5%AFstanou_u_v%C3%A1s-orange.svg)]()
 
@@ -25,7 +25,7 @@
 ```bash
 pip install cloakbrowser && pip install -e .
 
-# Vyhledejte přes kterýkoli z 90+ enginů
+# Vyhledejte přes kterýkoli z 100+ enginů
 agentsearch search "počasí Praha"             --engine seznam --limit 5
 agentsearch search "volby 2025 výsledky"      --engine seznam --limit 5
 agentsearch search "react hooks tutoriál"     --engine google --limit 5
@@ -106,7 +106,7 @@ pip install cloakbrowser
 pip install -e .
 ```
 
-Vyžaduje Python 3.9+. Při prvním spuštění se CloakBrowser (stealth Chromium) stáhne automaticky.
+Vyžaduje Python 3.12+. Při prvním spuštění se CloakBrowser (stealth Chromium) stáhne automaticky.
 
 ---
 
@@ -126,7 +126,7 @@ Přidejte do `~/.kiro/settings/mcp.json` (nebo ekvivalentního souboru v Cursor 
 }
 ```
 
-Vystavené nástroje: `search`, `extract`, `extract_many`, `list_engines`, `list_dev_docs_platforms`, `search_app`, `lookup_app`, `find_competitor_ads`, `download_ad_media`.
+18 vystavených nástrojů: `search`, `extract`, `extract_many`, `list_engines`, `list_dev_docs_platforms`, `search_app`, `lookup_app`, `find_competitor_ads`, `download_ad_media`, `search_many`, `engine_status`, `screenshot`, `download_files`, `summarise_news`, `ads_batch`, `image_search`, `image_search_many`, `download_images`.
 
 ---
 
@@ -136,4 +136,4 @@ Vše, co tu **není** (kompletní reference enginů, filtrovací volby, reklamn�
 
 ---
 
-*Jeden Python balíček · 90+ vyhledávačů · 142 vývojářských dokumentací · 5 reklamních knihoven · App Store · 9 MCP nástrojů — vše lokálně, bez API klíčů.*
+*Jeden Python balíček · 100+ vyhledávačů · 142 vývojářských dokumentací · 5 reklamních knihoven · App Store · 18 MCP nástrojů — vše lokálně, bez API klíčů.*

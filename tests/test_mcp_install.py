@@ -1,20 +1,28 @@
-"""Step 1: prove the registered MCP server actually starts.
+"""Prove the installed MCP server starts and advertises its public tools.
 
-Spawns the exact command from ~/.kiro/settings/mcp.json, does a
-JSON-RPC initialize + tools/list handshake over stdio, prints the
-advertised tool count and names, and shuts down cleanly. No browser
-work — this is purely a handshake test.
+Spawns the current interpreter, performs a JSON-RPC initialize + tools/list
+handshake over stdio, prints the advertised names, and shuts down cleanly.
+No browser work is performed, so this remains suitable for offline CI.
 
 Run:
-    /Users/gao/tools/cloakbrowser/venv/bin/python tests/test_mcp_install.py
+    python tests/test_mcp_install.py
 """
 from __future__ import annotations
 
 import json
 import os
+import selectors
 import subprocess
 import sys
 import time
+from pathlib import Path
+
+# Anchor both the assertion and child process to the checkout containing this
+# test. Otherwise an older globally installed ``agent_search`` can be imported
+# when the script is launched by absolute path from another working directory.
+REPO_ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(REPO_ROOT))
+from agent_search import __version__
 
 
 def _send(proc, msg):
@@ -25,23 +33,36 @@ def _send(proc, msg):
 
 def _recv(proc, want_id, timeout_s=15.0):
     """Read line-delimited JSON-RPC until we see a response for want_id."""
-    deadline = time.time() + timeout_s
-    while time.time() < deadline:
-        line = proc.stdout.readline()
-        if not line:
-            continue
-        try:
-            obj = json.loads(line.decode())
-        except Exception:
-            continue
-        if obj.get("id") == want_id:
-            return obj
+    deadline = time.monotonic() + timeout_s
+    selector = selectors.DefaultSelector()
+    selector.register(proc.stdout, selectors.EVENT_READ)
+    try:
+        while time.monotonic() < deadline:
+            remaining = deadline - time.monotonic()
+            if not selector.select(timeout=max(0.0, remaining)):
+                break
+            line = proc.stdout.readline()
+            if not line:
+                if proc.poll() is not None:
+                    raise RuntimeError(
+                        f"MCP server exited with code {proc.returncode} "
+                        f"while waiting for id={want_id}"
+                    )
+                continue
+            try:
+                obj = json.loads(line.decode())
+            except Exception:
+                continue
+            if obj.get("id") == want_id:
+                return obj
+    finally:
+        selector.close()
     raise TimeoutError(f"no response for id={want_id} in {timeout_s}s")
 
 
 def main():
     cmd = [
-        "/Users/gao/tools/cloakbrowser/venv/bin/python",
+        sys.executable,
         "-m", "agent_search.mcp_server",
     ]
     env = {
@@ -52,7 +73,7 @@ def main():
     print(f"spawning: {' '.join(cmd)}")
     proc = subprocess.Popen(
         cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE, env=env,
+        stderr=subprocess.PIPE, env=env, cwd=REPO_ROOT,
     )
 
     try:
@@ -71,6 +92,12 @@ def main():
             return 1
         info = init.get("result", {}).get("serverInfo", {})
         print(f"  server: {info.get('name')!r} v{info.get('version')!r}")
+        if info.get("version") != __version__:
+            print(
+                f"FAIL server version: expected {__version__!r}, "
+                f"got {info.get('version')!r}"
+            )
+            return 1
 
         # 2. notifications/initialized
         _send(proc, {
@@ -96,9 +123,9 @@ def main():
             "search", "extract", "extract_many", "list_engines",
             "list_dev_docs_platforms", "search_app", "lookup_app",
             "find_competitor_ads", "download_ad_media",
-            # New
             "search_many", "engine_status", "screenshot",
             "download_files", "summarise_news", "ads_batch",
+            "image_search", "image_search_many", "download_images",
         }
         missing = expected - set(names)
         extra = set(names) - expected
@@ -107,10 +134,7 @@ def main():
             return 1
         if extra:
             print(f"\n  note: extra tools (not failure): {sorted(extra)}")
-        if len(names) != 15:
-            print(f"\n  FAIL: expected 15 tools, got {len(names)}")
-            return 1
-        print(f"\n  PASS — all 15 tools advertised")
+        print(f"\n  PASS — all {len(expected)} required tools advertised")
         return 0
     finally:
         try:

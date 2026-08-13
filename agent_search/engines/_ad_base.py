@@ -21,6 +21,8 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass, field
 from typing import Any, Optional
 
+from ..results import result_to_dict
+
 
 @dataclass
 class AdRecord:
@@ -59,8 +61,8 @@ class AdRecord:
         score:
                   Optional engagement signal — CTR % from TikTok / Google
                   click-through rate / nothing for Meta.
-        raw:      The original :class:`SearchResult` ``__dict__`` so no
-                  data is lost.
+        raw:      The serialized :class:`SearchResult` payload so no data is
+                  lost, including adapter-specific extension fields.
     """
 
     platform: str
@@ -118,7 +120,9 @@ def to_ad_record(result: Any, *, platform: Optional[str] = None) -> AdRecord:
     The conversion is a single pass over a small set of well-known field
     names; unknown fields land in ``raw``.
     """
-    d = dict(result.__dict__) if not isinstance(result, dict) else dict(result)
+    # Keep ad normalization on the same serialization contract as CLI, MCP,
+    # and HTTP responses; adapters may add fields without exposing __dict__.
+    d = result_to_dict(result)
 
     # Pick platform.
     p = platform or d.get("platform")

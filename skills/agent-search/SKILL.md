@@ -1,9 +1,9 @@
 ---
 name: agent-search
-description: Local stealth-browser toolkit for the live web — 90+ search engines (Google, Reddit, GitHub, YouTube, arXiv, Bilibili, Zhihu, …) with dedicated regional engines for 🇨🇳 China (Baidu/Sogou/360), 🇰🇷 Korea (Naver/Daum), 🇯🇵 Japan (Yahoo! JAPAN), 🇷🇺 Russia (Yandex/Mail.ru), 🇻🇳 Vietnam (Cốc Cốc), 🇨🇿 Czechia (Seznam), 🇮🇳 India (Qmamu), 🇹🇭 Thailand (Pantip/Thairath), 🇮🇩 Indonesia (Detik/Kompas), 🇧🇷 Brazil (G1/Terra), and 🌍 Africa (allAfrica/Mail&Guardian); 5 ad-library engines (Meta / Instagram / TikTok Creative Center / TikTok Ad Library / Google Ads Transparency); 2 developer-doc engines covering 142 platforms (Stripe / OpenAI / Anthropic / AWS / TikTok / WhatsApp / Telegram / AppsFlyer / Adjust / data.ai / 七麦 …); Apple App Store + Google Play search; and competitor-research workflows (App URL → ads on every platform). All running in a Chromium on the user's machine — no API keys, no rate limits, no third-party servers. Use this skill whenever the user wants to search the web, look up developer docs, research a competitor's app + ads + landing pages, scan an attribution / MMP / ad-intel portal, or fetch up-to-date facts the model's training data wouldn't know — especially when the user wrote in a non-English language or named a specific country/site/vendor.
-version: 4.1.0
+description: Local stealth-browser toolkit for the live web — 100+ search engines (Google, Reddit, GitHub, YouTube, arXiv, Bilibili, Zhihu, …) with dedicated regional engines for 🇨🇳 China (Baidu/Sogou/360), 🇰🇷 Korea (Naver/Daum), 🇯🇵 Japan (Yahoo! JAPAN), 🇷🇺 Russia (Yandex/Mail.ru), 🇻🇳 Vietnam (Cốc Cốc), 🇨🇿 Czechia (Seznam), 🇮🇳 India (Qmamu), 🇹🇭 Thailand (Pantip/Thairath), 🇮🇩 Indonesia (Detik/Kompas), 🇧🇷 Brazil (G1/Terra), and 🌍 Africa (allAfrica/Mail&Guardian); 5 ad-library engines (Meta / Instagram / TikTok Creative Center / TikTok Ad Library / Google Ads Transparency); 2 developer-doc engines covering 142 platforms (Stripe / OpenAI / Anthropic / AWS / TikTok / WhatsApp / Telegram / AppsFlyer / Adjust / data.ai / 七麦 …); Apple App Store + Google Play search; and competitor-research workflows (App URL → ads on every platform). All running in a Chromium on the user's machine — no API keys, no rate limits, no third-party servers. Use this skill whenever the user wants to search the web, look up developer docs, research a competitor's app + ads + landing pages, scan an attribution / MMP / ad-intel portal, or fetch up-to-date facts the model's training data wouldn't know — especially when the user wrote in a non-English language or named a specific country/site/vendor.
+version: 4.2.0
 metadata:
-  short-description: 90+ search engines (incl. dedicated CN/KR/JP/RU/VN/CZ/IN/TH/ID/BR/Africa engines) + 142 dev-docs platforms + 5 ad libraries + App Store search + competitor-ad research — all local, no API keys.
+  short-description: 100+ search engines (incl. dedicated CN/KR/JP/RU/VN/CZ/IN/TH/ID/BR/Africa engines) + 142 dev-docs platforms + 5 ad libraries + App Store search + competitor-ad research — all local, no API keys.
   keywords:
     - web search
     - search engine
@@ -94,7 +94,7 @@ metadata:
 
 A local stealth-browser toolkit that gives an AI agent live access to:
 
-- **90+ web search engines** across 17 categories (general, code, academic, social, video, news, shopping, Chinese, **regional / local-language**, …)
+- **100+ web search engines** across 30+ categories (general, code, academic, social, video, news, shopping, Chinese, **regional / local-language**, …)
 - **5 ad-library engines** for competitor ad research (Meta + Instagram + TikTok CC + TikTok Ad Library + Google ATC)
 - **2 developer-documentation engines** covering **142 platforms** (Stripe / OpenAI / Anthropic / AWS / TikTok / WhatsApp / Telegram / Meta / AppsFlyer / Adjust / data.ai / Sensor Tower / 七麦 / 点点数据 / …)
 - **Apple App Store + Google Play search** with 25+ metadata fields per app
@@ -190,7 +190,7 @@ When the user mentions a country or writes in its native language, prefer these 
 
 ## 🔌 MCP Server Mode (recommended for AI hosts)
 
-AgentSearch ships an MCP server exposing **9 tools**. Configure once in Kiro / Claude Desktop / Cursor / Cline / Continue, then call directly.
+AgentSearch ships an MCP server exposing **18 tools**. Configure once in Kiro / Claude Desktop / Cursor / Cline / Continue, then call directly.
 
 ### Configure (Kiro `.kiro/settings/mcp.json`)
 
@@ -198,7 +198,7 @@ AgentSearch ships an MCP server exposing **9 tools**. Configure once in Kiro / C
 {
   "mcpServers": {
     "agent-search": {
-      "command": "/Users/gao/tools/cloakbrowser/venv/bin/python",
+      "command": "/path/to/agentsearch/venv/bin/python",
       "args": ["-m", "agent_search.mcp_server"],
       "env": {
         "AGENTSEARCH_HEADLESS": "1",
@@ -209,11 +209,11 @@ AgentSearch ships an MCP server exposing **9 tools**. Configure once in Kiro / C
 }
 ```
 
-### The 9 MCP tools
+### The 18 MCP tools
 
 | Tool | Args | Purpose |
 |---|---|---|
-| **`search`** | `query, engine, limit, depth, engine_options` | Query any of 90+ engines; `engine_options` dict forwards engine-specific kwargs (platform / mode / country / page_id / sort / …); `depth>0` inlines markdown for top N hits |
+| **`search`** | `query, engine, limit, depth, engine_options` | Query any of 100+ engines; `engine_options` dict forwards engine-specific kwargs (platform / mode / country / page_id / sort / …); `depth>0` inlines markdown for top N hits |
 | **`extract`** | `url, paginate, max_scrolls, include_links, include_images` | Fetch one URL, return readability-extracted markdown + structured metadata |
 | **`extract_many`** | `urls[], paginate, max_scrolls, include_links, include_images` | Batch extract — preserves input order, validates URLs, returns one record per URL |
 | **`list_engines`** | (none) | Enumerate engines + categories + companion_tools + `engine_options_examples` |
@@ -222,6 +222,15 @@ AgentSearch ships an MCP server exposing **9 tools**. Configure once in Kiro / C
 | **`lookup_app`** | `app_url, country, proxy_url` | Single-app metadata from store URL or bare id |
 | **`find_competitor_ads`** | `app_url, platforms[], limit_per_platform, country, precise, proxy_url` | App URL → fan-out to Meta/IG/Google/TikTok ad libraries → merged ad stream |
 | **`download_ad_media`** | `records[], output_dir, proxy_url, max_per_record, max_workers, timeout` | Bulk-download every image / video URL from a list of ad-engine results |
+| **`search_many`** | `query, engines[], limit, timeout_s, max_workers` | Run isolated engines in parallel, enforce a hard deadline, and URL-dedupe the merged feed |
+| **`engine_status`** | `engines?, only_with_history` | Inspect local reliability, latency, and result-count history |
+| **`screenshot`** | `url, full_page, selector?, format` | Capture a rendered page or selected element as base64 PNG/JPEG |
+| **`download_files`** | `urls[], output_dir, proxy_url?, max_workers` | Bulk-download arbitrary reports, images, archives, or datasets |
+| **`summarise_news`** | `topic, sources?, limit_per_source, depth, timeout_s` | Cross-source topic collection with optional article extraction |
+| **`ads_batch`** | `app_urls[], platforms?, output_dir?` | Run competitor-ad research across a list of apps or domains |
+| **`image_search`** | `query, engine, limit` | Search one dedicated image engine and return full-size asset URLs |
+| **`image_search_many`** | `query, engines?, limit, timeout_s` | Search image engines in isolated workers with a hard deadline |
+| **`download_images`** | `images[], output_dir, proxy_url?, max_workers` | Download image-search records while preserving source metadata |
 
 ### 💡 Two patterns that save the most time
 
@@ -306,7 +315,7 @@ Returns one record per URL (preserves order, validates http(s)).
 
 ---
 
-## The 90+ Engines
+## The 100+ Engines
 
 Always pick the engine that matches the user's intent. Fall back to `google` / `duckduckgo` / `bing` when uncertain.
 
@@ -703,4 +712,4 @@ The only network traffic is the direct request from the user's machine to the ta
 ---
 
 *One skill, the whole web — local, free, no API keys.*
-*90+ engines · 142 dev-docs platforms · 5 ad libraries · App Store search · 9 MCP tools.*
+*100+ engines · 142 dev-docs platforms · 5 ad libraries · App Store search · 18 MCP tools.*

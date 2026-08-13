@@ -6,11 +6,11 @@
 
 # **無料 · ローカル · プライベート · Cloudflare 突破**
 
-**Python パッケージひとつ。90+ サイト。API キー 0。データ漏洩 0。**
+**Python パッケージひとつ。100+ サイト。API キー 0。データ漏洩 0。**
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
-[![Python 3.9+](https://img.shields.io/badge/Python-3.9+-blue.svg)](https://www.python.org/)
-[![Sites: 90+](https://img.shields.io/badge/Sites-90%2B-success.svg)]()
+[![Python 3.12+](https://img.shields.io/badge/Python-3.12+-blue.svg)](https://www.python.org/)
+[![Sites: 100+](https://img.shields.io/badge/Sites-100%2B-success.svg)]()
 [![No API Key](https://img.shields.io/badge/API_Key-不要-success.svg)]()
 [![Local Only](https://img.shields.io/badge/データ-自分のPC内-orange.svg)]()
 
@@ -25,7 +25,7 @@
 ```bash
 pip install cloakbrowser && pip install -e .
 
-# 90+ サイトを直接検索
+# 100+ サイトを直接検索
 agentsearch search "生成AI 業界動向"   --engine yahoo_japan --limit 5
 agentsearch search "東京オリンピック"  --engine yahoo_japan --limit 5
 agentsearch search "react hooks 入門"  --engine google      --limit 5
@@ -104,7 +104,7 @@ pip install cloakbrowser
 pip install -e .
 ```
 
-Python 3.9+ 必須。初回実行時に CloakBrowser(ステルス Chromium)が自動ダウンロードされます。
+Python 3.12+ 必須。初回実行時に CloakBrowser(ステルス Chromium)が自動ダウンロードされます。
 
 ---
 
@@ -124,7 +124,7 @@ Python 3.9+ 必須。初回実行時に CloakBrowser(ステルス Chromium)が�
 }
 ```
 
-公開ツール: `search`, `extract`, `extract_many`, `list_engines`, `list_dev_docs_platforms`, `search_app`, `lookup_app`, `find_competitor_ads`, `download_ad_media`.
+公開される 18 ツール: `search`, `extract`, `extract_many`, `list_engines`, `list_dev_docs_platforms`, `search_app`, `lookup_app`, `find_competitor_ads`, `download_ad_media`, `search_many`, `engine_status`, `screenshot`, `download_files`, `summarise_news`, `ads_batch`, `image_search`, `image_search_many`, `download_images`.
 
 ---
 
@@ -134,4 +134,4 @@ Python 3.9+ 必須。初回実行時に CloakBrowser(ステルス Chromium)が�
 
 ---
 
-*Python パッケージ 1 つ · 90+ 検索エンジン · 142 開発者ドキュメント · 5 広告ライブラリ · App Store · 9 MCP ツール — すべてローカル、API キー不要。*
+*Python パッケージ 1 つ · 100+ 検索エンジン · 142 開発者ドキュメント · 5 広告ライブラリ · App Store · 18 MCP ツール — すべてローカル、API キー不要。*

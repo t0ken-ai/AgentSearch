@@ -31,6 +31,8 @@ import time
 from pathlib import Path
 from typing import Any
 
+from .results import result_to_dict
+
 log = logging.getLogger(__name__)
 
 # Sliding window size per engine. 50 attempts is enough to compute a
@@ -261,7 +263,7 @@ def search_with_fallback(
             return {
                 "query": query,
                 "engine": engine_name,
-                "results": [r.__dict__ for r in out["results"]],
+                "results": [result_to_dict(r) for r in out["results"]],
                 "attempts": attempts,
                 "fallback": engine_name != primary if primary else False,
             }

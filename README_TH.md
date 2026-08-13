@@ -6,11 +6,11 @@
 
 # **ฟรี · ทำงานในเครื่อง · เป็นส่วนตัว · ผ่าน Cloudflare ได้**
 
-**Python แพ็กเกจเดียว. 90+ เว็บไซต์. ไม่ต้องใช้ API key. ไม่มีข้อมูลรั่วไหล.**
+**Python แพ็กเกจเดียว. 100+ เว็บไซต์. ไม่ต้องใช้ API key. ไม่มีข้อมูลรั่วไหล.**
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
-[![Python 3.9+](https://img.shields.io/badge/Python-3.9+-blue.svg)](https://www.python.org/)
-[![Sites: 90+](https://img.shields.io/badge/Sites-90%2B-success.svg)]()
+[![Python 3.12+](https://img.shields.io/badge/Python-3.12+-blue.svg)](https://www.python.org/)
+[![Sites: 100+](https://img.shields.io/badge/Sites-100%2B-success.svg)]()
 [![No API Key](https://img.shields.io/badge/ไม่ต้องใช้-API_Key-success.svg)]()
 [![Local Only](https://img.shields.io/badge/ข้อมูล-อยู่ในเครื่องคุณ-orange.svg)]()
 
@@ -25,7 +25,7 @@
 ```bash
 pip install cloakbrowser && pip install -e .
 
-# ค้นหาผ่าน engine ใดก็ได้จาก 90+ ตัว
+# ค้นหาผ่าน engine ใดก็ได้จาก 100+ ตัว
 agentsearch search "ราคาทองวันนี้"      --engine thairath --limit 5
 agentsearch search "ร้านอาหารกรุงเทพ"   --engine pantip   --limit 5
 agentsearch search "react hooks"         --engine google   --limit 5
@@ -104,7 +104,7 @@ pip install cloakbrowser
 pip install -e .
 ```
 
-ต้องใช้ Python 3.9+ การรันครั้งแรก CloakBrowser (Chromium stealth) จะดาวน์โหลดเองอัตโนมัติ
+ต้องใช้ Python 3.12+ การรันครั้งแรก CloakBrowser (Chromium stealth) จะดาวน์โหลดเองอัตโนมัติ
 
 ---
 
@@ -124,7 +124,7 @@ pip install -e .
 }
 ```
 
-เครื่องมือที่เปิดให้ใช้: `search`, `extract`, `extract_many`, `list_engines`, `list_dev_docs_platforms`, `search_app`, `lookup_app`, `find_competitor_ads`, `download_ad_media`
+เครื่องมือที่เปิดให้ใช้ 18 รายการ: `search`, `extract`, `extract_many`, `list_engines`, `list_dev_docs_platforms`, `search_app`, `lookup_app`, `find_competitor_ads`, `download_ad_media`, `search_many`, `engine_status`, `screenshot`, `download_files`, `summarise_news`, `ads_batch`, `image_search`, `image_search_many`, `download_images`
 
 ---
 
@@ -134,4 +134,4 @@ pip install -e .
 
 ---
 
-*Python แพ็กเกจเดียว · 90+ search engines · 142 dev-docs platforms · 5 ad libraries · App Store · 9 MCP tools — ทำงานในเครื่องทั้งหมด ไม่ต้องใช้ API key*
+*Python แพ็กเกจเดียว · 100+ search engines · 142 dev-docs platforms · 5 ad libraries · App Store · 18 MCP tools — ทำงานในเครื่องทั้งหมด ไม่ต้องใช้ API key*

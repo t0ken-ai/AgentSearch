@@ -1,0 +1,26 @@
+name: Unit tests
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  offline:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.12", "3.13"]
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+      - name: Install package and MCP transport
+        run: python -m pip install -e ".[mcp]"
+      - name: Run offline regression suite
+        run: python -m unittest discover -s tests/unit -t . -v
+      - name: Verify MCP registration
+        run: python tests/test_mcp_install.py

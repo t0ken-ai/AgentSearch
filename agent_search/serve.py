@@ -38,15 +38,17 @@ import logging
 import os
 import sys
 import threading
-from concurrent.futures import ThreadPoolExecutor
+from contextlib import contextmanager
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from typing import Any
 from urllib.parse import urlparse
 
+from . import __version__
 from .cli import _engine_registry, _get_engine, _resolve_profile_dir
 from .core import BrowserConfig, launch, new_page
 from .extract import extract_page
 from .multi import search_many
+from .results import result_to_dict
 
 log = logging.getLogger(__name__)
 
@@ -74,17 +76,45 @@ def _resolve_default_proxy() -> str | None:
 
 
 class BrowserPool:
+    """Manage one anonymous browser plus isolated persistent profiles.
+
+    Anonymous requests may safely reuse the shared browser in this
+    single-threaded HTTP server. A named profile carries user identity and is
+    therefore launched as a dedicated session that is never assigned to the
+    shared slot and is always closed when the request finishes.
+    """
+
     def __init__(self) -> None:
         self._browser = None
         self._calls = 0
         self._lock = threading.Lock()
 
-    def page(self, user_data_dir: str | None = None):
+    @contextmanager
+    def session(self, user_data_dir: str | None = None):
+        """Yield a browser with request-scoped profile isolation.
+
+        The caller owns pages created from the yielded browser. This context
+        owns and closes only dedicated profile browsers; the anonymous shared
+        browser remains alive until recycling or server shutdown.
+        """
+        if user_data_dir:
+            dedicated = launch(BrowserConfig(
+                headless=True,
+                humanize=True,
+                user_data_dir=user_data_dir,
+                proxy=_resolve_default_proxy(),
+            ))
+            try:
+                yield dedicated
+            finally:
+                try:
+                    dedicated.close()
+                except Exception:
+                    pass
+            return
+
         with self._lock:
-            # When a profile is requested we always launch a fresh
-            # browser tied to that user_data_dir — different profiles
-            # cannot share a Browser, since user_data_dir is per-launch.
-            if user_data_dir or self._calls >= RECYCLE_AFTER or self._browser is None:
+            if self._calls >= RECYCLE_AFTER or self._browser is None:
                 if self._browser is not None:
                     try:
                         self._browser.close()
@@ -93,12 +123,12 @@ class BrowserPool:
                 self._browser = launch(BrowserConfig(
                     headless=True,
                     humanize=True,
-                    user_data_dir=user_data_dir,
                     proxy=_resolve_default_proxy(),
                 ))
                 self._calls = 0
             self._calls += 1
-            return new_page(self._browser)
+            browser = self._browser
+        yield browser
 
     def shutdown(self) -> None:
         with self._lock:
@@ -117,7 +147,7 @@ _pool = BrowserPool()
 
 
 class Handler(BaseHTTPRequestHandler):
-    server_version = "AgentSearch/1.0"
+    server_version = f"AgentSearch/{__version__}"
 
     # --------------------------------------------------------------- helpers
 
@@ -197,41 +227,49 @@ class Handler(BaseHTTPRequestHandler):
         except ValueError as e:
             return 400, {"error": str(e)}
 
-        page = _pool.page(user_data_dir=_resolve_profile_dir(profile))
+        profile_dir = _resolve_profile_dir(profile)
         try:
-            instance = engine_cls(page)
-            raw = instance.search(query, limit=limit) or []
-            if depth > 0:
-                for r in raw[:depth]:
-                    if not getattr(r, "url", None):
-                        continue
-                    ep = _pool.page()
+            with _pool.session(user_data_dir=profile_dir) as browser:
+                page = new_page(browser)
+                try:
+                    instance = engine_cls(page)
+                    raw = instance.search(query, limit=limit) or []
+                finally:
                     try:
-                        rec = extract_page(ep, url=r.url, paginate=True, max_scrolls=2,
-                                           include_links=False, include_images=False)
-                        r.__dict__["body_markdown"] = rec.get("content_markdown") or ""
-                        r.__dict__["body_word_count"] = rec.get("word_count") or 0
-                    except Exception as e:
-                        r.__dict__["body_error"] = f"{type(e).__name__}: {e}"
-                    finally:
+                        page.close()
+                    except Exception:
+                        pass
+
+                if depth > 0:
+                    for r in raw[:depth]:
+                        if not getattr(r, "url", None):
+                            continue
+                        # Deep fetch uses the same browser session so a
+                        # profile-gated result keeps its authenticated state.
+                        ep = new_page(browser)
                         try:
-                            ep.close()
-                        except Exception:
-                            pass
+                            rec = extract_page(
+                                ep, url=r.url, paginate=True, max_scrolls=2,
+                                include_links=False, include_images=False,
+                            )
+                            r.__dict__["body_markdown"] = rec.get("content_markdown") or ""
+                            r.__dict__["body_word_count"] = rec.get("word_count") or 0
+                        except Exception as e:
+                            r.__dict__["body_error"] = f"{type(e).__name__}: {e}"
+                        finally:
+                            try:
+                                ep.close()
+                            except Exception:
+                                pass
         except Exception as e:
             log.exception("search failed")
             return 500, {"error": f"{type(e).__name__}: {e}"}
-        finally:
-            try:
-                page.close()
-            except Exception:
-                pass
 
         return 200, {
             "engine": engine,
             "query": query,
             "count": len(raw),
-            "results": [r.__dict__ for r in raw],
+            "results": [result_to_dict(r) for r in raw],
         }
 
     def _do_search_many(self, body: dict[str, Any]) -> tuple[int, Any]:
@@ -259,17 +297,24 @@ class Handler(BaseHTTPRequestHandler):
         images = bool(body.get("images", False))
         profile = body.get("profile")
 
-        page = _pool.page(user_data_dir=_resolve_profile_dir(profile))
         try:
-            rec = extract_page(page, url=url, paginate=paginate, max_scrolls=max_scrolls,
-                               include_links=links, include_images=images)
+            with _pool.session(
+                user_data_dir=_resolve_profile_dir(profile)
+            ) as browser:
+                page = new_page(browser)
+                try:
+                    rec = extract_page(
+                        page, url=url, paginate=paginate,
+                        max_scrolls=max_scrolls,
+                        include_links=links, include_images=images,
+                    )
+                finally:
+                    try:
+                        page.close()
+                    except Exception:
+                        pass
         except Exception as e:
             return 500, {"error": f"{type(e).__name__}: {e}"}
-        finally:
-            try:
-                page.close()
-            except Exception:
-                pass
         return 200, rec
 
 

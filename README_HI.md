@@ -6,11 +6,11 @@
 
 # **मुफ़्त · लोकल · प्राइवेट · Cloudflare को बायपास करता है**
 
-**एक Python पैकेज। 90+ साइटें। कोई API की ज़रूरत नहीं। कोई डेटा लीक नहीं।**
+**एक Python पैकेज। 100+ साइटें। कोई API की ज़रूरत नहीं। कोई डेटा लीक नहीं।**
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
-[![Python 3.9+](https://img.shields.io/badge/Python-3.9+-blue.svg)](https://www.python.org/)
-[![Sites: 90+](https://img.shields.io/badge/Sites-90%2B-success.svg)]()
+[![Python 3.12+](https://img.shields.io/badge/Python-3.12+-blue.svg)](https://www.python.org/)
+[![Sites: 100+](https://img.shields.io/badge/Sites-100%2B-success.svg)]()
 [![No API Key](https://img.shields.io/badge/API_Key-नहीं_चाहिए-success.svg)]()
 [![Local Only](https://img.shields.io/badge/डेटा-आपके_PC_में-orange.svg)]()
 
@@ -25,7 +25,7 @@
 ```bash
 pip install cloakbrowser && pip install -e .
 
-# 90+ इंजनों में से किसी पर भी सर्च करें
+# 100+ इंजनों में से किसी पर भी सर्च करें
 agentsearch search "Mumbai monsoon 2026"      --engine qmamu  --limit 5
 agentsearch search "UPI fraud cases"           --engine qmamu  --limit 5
 agentsearch search "react hooks tutorial"      --engine google --limit 5
@@ -106,7 +106,7 @@ pip install cloakbrowser
 pip install -e .
 ```
 
-Python 3.9+ ज़रूरी। पहली बार चलाने पर CloakBrowser (stealth Chromium) अपने आप डाउनलोड हो जाता है।
+Python 3.12+ ज़रूरी। पहली बार चलाने पर CloakBrowser (stealth Chromium) अपने आप डाउनलोड हो जाता है।
 
 ---
 
@@ -126,7 +126,7 @@ Python 3.9+ ज़रूरी। पहली बार चलाने पर 
 }
 ```
 
-उपलब्ध टूल: `search`, `extract`, `extract_many`, `list_engines`, `list_dev_docs_platforms`, `search_app`, `lookup_app`, `find_competitor_ads`, `download_ad_media`।
+18 उपलब्ध टूल: `search`, `extract`, `extract_many`, `list_engines`, `list_dev_docs_platforms`, `search_app`, `lookup_app`, `find_competitor_ads`, `download_ad_media`, `search_many`, `engine_status`, `screenshot`, `download_files`, `summarise_news`, `ads_batch`, `image_search`, `image_search_many`, `download_images`।
 
 ---
 
@@ -136,4 +136,4 @@ Python 3.9+ ज़रूरी। पहली बार चलाने पर 
 
 ---
 
-*एक Python पैकेज · 90+ सर्च इंजन · 142 dev डॉक्स प्लेटफ़ॉर्म · 5 ad libraries · App Store · 9 MCP tools — सब लोकल, कोई API key नहीं।*
+*एक Python पैकेज · 100+ सर्च इंजन · 142 dev डॉक्स प्लेटफ़ॉर्म · 5 ad libraries · App Store · 18 MCP tools — सब लोकल, कोई API key नहीं।*
